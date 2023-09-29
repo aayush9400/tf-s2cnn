@@ -6,3 +6,4 @@ dist
 *cache
 notebooks/
 *.gz
+scnn_env/

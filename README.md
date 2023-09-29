@@ -12,19 +12,19 @@ This library contains a TensorFlow implementation of the rotation equivariant CN
 * __cython__: https://github.com/cython/cython (<= 3.0)
 * __lie_learn__: https://github.com/kalekundert/lie_learn@fix-install
 
-(commands to install all the dependencies on a new conda environment)
+(commands to install all the dependencies on a new environment)
 ```bash
-conda create --name cuda9 python=3.6 
-conda activate cuda9
+# tf-s2cnn deps
+python -m pip install --upgrade pip wheel cython<3.0
+pip install git+https://github.com/kalekundert/lie_learn@fix-install
 
-# s2cnn deps
-conda install tensorflow  # get correct command line at https://www.tensorflow.org/
-pip install pynvrtc joblib
+pip install tensorflow==2.14.0  # get correct command line at https://www.tensorflow.org/
+pip install tqdm
 
-# lie_learn deps
-conda install -c anaconda cython <= 3.0
-conda install -c anaconda cython  
-conda install -c anaconda requests
+# update venv\lib\site-packages\lie_learn\representations\SO3\wigner_d.py
+import collections
+collections.Iterable = collections.abc.Iterable
+
 ```
 <!---
 # shrec17 example dep
@@ -33,14 +33,6 @@ conda install -c conda-forge rtree shapely
 conda install -c conda-forge pyembree  
 pip install "trimesh[easy]"
 -->
-
-## Installation
-
-To install, run
-
-```bash
-$ python setup.py install
-```
 
 ## Usage
 Please have a look at the [examples](examples).
