@@ -1,19 +1,16 @@
-:warning: :warning: This code is old and does not support the last versions of pytorch! Especially since the change in the fft interface. :warning: :warning: 
-
 # Spherical CNNs
 ## Equivariant CNNs for the sphere and SO(3) implemented in PyTorch
 
 ![Equivariance](https://github.com/jonas-koehler/s2cnn/raw/master/examples/equivariance_plot/fig.jpeg)
 
 ## Overview
-This library contains a PyTorch implementation of the rotation equivariant CNNs for spherical signals (e.g. omnidirectional images, signals on the globe) as presented in [[1]](https://arxiv.org/abs/1801.10130). Equivariant networks for the plane are available [here](https://github.com/tscohen/GrouPy).
+This library contains a TensorFlow implementation of the rotation equivariant CNNs for spherical signals (e.g. omnidirectional images, signals on the globe) as presented in [[1]](https://arxiv.org/abs/1801.10130). Equivariant networks for the plane are available [here](https://github.com/tscohen/GrouPy).
 
 ## Dependencies
 
-* __PyTorch__: http://pytorch.org/ (>= 0.4.0)
-* __cupy__: https://github.com/cupy/cupy
-* __lie_learn__: https://github.com/AMLab-Amsterdam/lie_learn
-* __pynvrtc__: https://github.com/NVIDIA/pynvrtc
+* __TensorFlow__: http://pytorch.org/ (>= 2.0)
+* __cython__: https://github.com/cython/cython (<= 3.0)
+* __lie_learn__: https://github.com/kalekundert/lie_learn@fix-install
 
 (commands to install all the dependencies on a new conda environment)
 ```bash
@@ -21,19 +18,21 @@ conda create --name cuda9 python=3.6
 conda activate cuda9
 
 # s2cnn deps
-#conda install pytorch torchvision cuda90 -c pytorch # get correct command line at http://pytorch.org/
-conda install -c anaconda cupy  
+#conda install tensorflow  # get correct command line at https://www.tensorflow.org/
 pip install pynvrtc joblib
 
 # lie_learn deps
+conda install -c anaconda cython <= 3.0
 conda install -c anaconda cython  
-conda install -c anaconda requests  
+conda install -c anaconda requests
 
+<!---
 # shrec17 example dep
 conda install -c anaconda scipy  
 conda install -c conda-forge rtree shapely  
 conda install -c conda-forge pyembree  
-pip install "trimesh[easy]"  
+pip install "trimesh[easy]"
+-->
 ```
 
 ## Installation
@@ -58,7 +57,7 @@ In contrast, `s2_equatorial_grid` and `so3_equatorial_grid` define line-like (or
 
 To clarify the possible parameter choices for `s2_near_identity_grid`:
 #### max_beta:
-Adapts the size of the kernel as angle measured from the north pole.
+Adapts the size of the kernel as the angle measured from the north pole.
 Conventional CNNs on flat space usually use a fixed kernel size but pool the signal spatially.
 This spatial pooling gives the kernels in later layers an effectively increased field of view.
 One can emulate a pooling by a factor of 2 in spherical CNNs by decreasing the signal bandwidth by 2 and increasing `max_beta` by 2.
@@ -69,7 +68,7 @@ The choice `n_beta=1` corresponds to a small 3x3 kernel in `conv2d` since in bot
 #### n_alpha:
 Gives the number of learned parameters of the rings around the pole.
 These values are per default equally spaced on the azimuth.
-A sensible number of values depends on the bandwidth and `max_beta` since a higher resolution or spatial extent allow to sample more fine kernels without producing aliased results.
+A sensible number of values depends on the bandwidth and `max_beta` since a higher resolution or spatial extent allows to sample more fine kernels without producing aliased results.
 In practice this value is typically set to a constant, low value like 6 or 8.
 A reduced bandwidth of the signal is thereby counteracted by an increased `max_beta` to emulate spatial pooling.
 
@@ -87,14 +86,6 @@ Typically set equal to `n_alpha`, i.e. to a low value like 6 or 8.
 
 See the deep model of the MNIST example for an example of how to adapt these parameters over layers.
 
-
-
-## Feedback
-For questions and comments, feel free to contact us: **geiger.mario (gmail)**, taco.cohen (gmail), jonas (argmin.xyz).
-
-
-## License
-MIT
 
 ## References
 
