@@ -25,7 +25,7 @@ pip install pynvrtc joblib
 conda install -c anaconda cython <= 3.0
 conda install -c anaconda cython  
 conda install -c anaconda requests
-
+```
 <!---
 # shrec17 example dep
 conda install -c anaconda scipy  
@@ -33,7 +33,6 @@ conda install -c conda-forge rtree shapely
 conda install -c conda-forge pyembree  
 pip install "trimesh[easy]"
 -->
-```
 
 ## Installation
 
