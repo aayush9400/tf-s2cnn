@@ -8,7 +8,7 @@ This library contains a TensorFlow implementation of the rotation equivariant CN
 
 ## Dependencies
 
-* __TensorFlow__: http://pytorch.org/ (>= 2.0)
+* __TensorFlow__: https://www.tensorflow.org/ (>= 2.0)
 * __cython__: https://github.com/cython/cython (<= 3.0)
 * __lie_learn__: https://github.com/kalekundert/lie_learn@fix-install
 
