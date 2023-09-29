@@ -1,5 +1,5 @@
 # pylint: disable=R,C,E1101
-import torch
+import tensorflow as tf
 import numpy as np
 from functools import lru_cache
 from s2cnn.utils.decorator import cached_dirpklgz
@@ -14,13 +14,13 @@ def s2_rft(x, b, grid):
     :return: [l * m, ..., complex]
     """
     # F is the Fourier matrix
-    F = _setup_s2_ft(b, grid, device_type=x.device.type, device_index=x.device.index)  # [beta_alpha, l * m, complex]
+    F = _setup_s2_ft(b, grid)  # [beta_alpha, l * m, complex]
 
-    assert x.size(-1) == F.size(0)
+    assert x.shape[-1] == F.shape[0]
 
-    sz = x.size()
-    x = torch.einsum("ia,afc->fic", (x.view(-1, x.size(-1)), F.clone()))  # [l * m, ..., complex]
-    x = x.view(-1, *sz[:-1], 2)
+    sz = x.shape.as_list()
+    x = tf.einsum("ia,afc->fic", tf.reshape(x, (-1, x.shape[-1])), tf.identity(F)) # [l * m, ..., complex]
+    x = tf.reshape(x, (-1, *sz[:-1], 2))
     return x
 
 
@@ -51,10 +51,9 @@ def __setup_s2_ft(b, grid):
 
 
 @lru_cache(maxsize=32)
-def _setup_s2_ft(b, grid, device_type, device_index):
+def _setup_s2_ft(b, grid):
     F = __setup_s2_ft(b, grid)
-
     # convert to torch Tensor
-    F = torch.tensor(F.astype(np.float32), dtype=torch.float32, device=torch.device(device_type, device_index))  # pylint: disable=E1102
+    F = tf.convert_to_tensor(F.astype(np.float32), dtype=tf.float32)  # pylint: disable=E1102
 
     return F

@@ -1,23 +1,20 @@
 # pylint: disable=E1101,R,C
 import numpy as np
-import torch.nn as nn
 from s2cnn import SO3Convolution
 from s2cnn import S2Convolution
 from s2cnn import so3_integrate
 from s2cnn import so3_near_identity_grid
 from s2cnn import s2_near_identity_grid
-import torch.nn.functional as F
-import torch
-import torch.utils.data as data_utils
+import tensorflow as tf
 import gzip
 import pickle
 import numpy as np
-from torch.autograd import Variable
 import argparse
+from tqdm import tqdm
 
 MNIST_PATH = "s2_mnist.gz"
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DEVICE = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0"
 
 NUM_EPOCHS = 20
 BATCH_SIZE = 32
@@ -25,35 +22,25 @@ LEARNING_RATE = 5e-3
 
 
 def load_data(path, batch_size):
-
+    
     with gzip.open(path, 'rb') as f:
         dataset = pickle.load(f)
 
-    train_data = torch.from_numpy(
-        dataset["train"]["images"][:, None, :, :].astype(np.float32))
-    train_labels = torch.from_numpy(
-        dataset["train"]["labels"].astype(np.int64))
+    train_data = tf.convert_to_tensor(dataset["train"]["images"][:, None, :, :].astype(np.float64))
+    train_labels = tf.convert_to_tensor(dataset["train"]["labels"].astype(np.int64))
 
-    # TODO normalize dataset
-    # mean = train_data.mean()
-    # stdv = train_data.std()
-
-    train_dataset = data_utils.TensorDataset(train_data, train_labels)
-    train_loader = data_utils.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-    test_data = torch.from_numpy(
-        dataset["test"]["images"][:, None, :, :].astype(np.float32))
-    test_labels = torch.from_numpy(
-        dataset["test"]["labels"].astype(np.int64))
-
-    test_dataset = data_utils.TensorDataset(test_data, test_labels)
-    test_loader = data_utils.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-
-    return train_loader, test_loader, train_dataset, test_dataset
+    test_data = tf.convert_to_tensor(dataset["test"]["images"][:, None, :, :].astype(np.float64))
+    test_labels = tf.convert_to_tensor(dataset["test"]["labels"].astype(np.int64))
+    
+    train_dataset = tf.data.Dataset.from_tensor_slices((train_data, train_labels)).batch(batch_size)
+    test_dataset = tf.data.Dataset.from_tensor_slices((test_data, test_labels)).batch(batch_size)
+    # for i in train_dataset.as_numpy_iterator():
+    #     print(i[0].shape, i[1].shape)
+    #     break
+    return train_dataset, test_dataset
 
 
-class S2ConvNet_original(nn.Module):
-
+class S2ConvNet_original(tf.keras.Model):
     def __init__(self):
         super(S2ConvNet_original, self).__init__()
 
@@ -82,23 +69,26 @@ class S2ConvNet_original(nn.Module):
             b_out=b_l2,
             grid=grid_so3)
 
-        self.out_layer = nn.Linear(f2, f_output)
+        self.fc = tf.keras.layers.Dense(f_output)
 
-    def forward(self, x):
-
+    def call(self, x):
+        x = tf.reshape(x, (BATCH_SIZE,1,60,60))
         x = self.conv1(x)
-        x = F.relu(x)
+        # print(x.shape.as_list())
+        x = tf.keras.activations.relu(x)
+        # print(x.shape.as_list())
         x = self.conv2(x)
-        x = F.relu(x)
-
+        # print(x.shape.as_list())
+        x = tf.keras.activations.relu(x)
+        # print(x.shape.as_list())
         x = so3_integrate(x)
-
-        x = self.out_layer(x)
-
+        # print(x.shape.as_list())
+        x = self.fc(x)
+        # print("model", x.shape.as_list())
         return x
 
 
-class S2ConvNet_deep(nn.Module):
+class S2ConvNet_deep(tf.keras.Model):
 
     def __init__(self, bandwidth=30):
         super(S2ConvNet_deep, self).__init__()
@@ -109,21 +99,22 @@ class S2ConvNet_deep(nn.Module):
         grid_so3_3 = so3_near_identity_grid(n_alpha=6, max_beta=np.pi/ 4, n_beta=1, max_gamma=2*np.pi, n_gamma=6)
         grid_so3_4 = so3_near_identity_grid(n_alpha=6, max_beta=np.pi/ 2, n_beta=1, max_gamma=2*np.pi, n_gamma=6)
 
-        self.convolutional = nn.Sequential(
+        self.convolutional = tf.keras.Sequential([
             S2Convolution(
                 nfeature_in  = 1,
                 nfeature_out = 8,
                 b_in  = bandwidth,
                 b_out = bandwidth,
                 grid=grid_s2),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
+
             SO3Convolution(
                 nfeature_in  =  8,
                 nfeature_out = 16,
                 b_in  = bandwidth,
                 b_out = bandwidth//2,
                 grid=grid_so3_1),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
 
             SO3Convolution(
                 nfeature_in  = 16,
@@ -131,14 +122,15 @@ class S2ConvNet_deep(nn.Module):
                 b_in  = bandwidth//2,
                 b_out = bandwidth//2,
                 grid=grid_so3_2),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
+
             SO3Convolution(
                 nfeature_in  = 16,
                 nfeature_out = 24,
                 b_in  = bandwidth//2,
                 b_out = bandwidth//4,
                 grid=grid_so3_2),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
 
             SO3Convolution(
                 nfeature_in  = 24,
@@ -146,14 +138,15 @@ class S2ConvNet_deep(nn.Module):
                 b_in  = bandwidth//4,
                 b_out = bandwidth//4,
                 grid=grid_so3_3),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
+
             SO3Convolution(
                 nfeature_in  = 24,
                 nfeature_out = 32,
                 b_in  = bandwidth//4,
                 b_out = bandwidth//8,
                 grid=grid_so3_3),
-            nn.ReLU(inplace=False),
+            tf.keras.layers.ReLU(),
 
             SO3Convolution(
                 nfeature_in  = 32,
@@ -161,35 +154,30 @@ class S2ConvNet_deep(nn.Module):
                 b_in  = bandwidth//8,
                 b_out = bandwidth//8,
                 grid=grid_so3_4),
-            nn.ReLU(inplace=False)
-            )
+            tf.keras.layers.ReLU()
+        ])
 
-        self.linear = nn.Sequential(
-            # linear 1
-            nn.BatchNorm1d(64),
-            nn.Linear(in_features=64,out_features=64),
-            nn.ReLU(inplace=False),
-            # linear 2
-            nn.BatchNorm1d(64),
-            nn.Linear(in_features=64, out_features=32),
-            nn.ReLU(inplace=False),
-            # linear 3
-            nn.BatchNorm1d(32),
-            nn.Linear(in_features=32, out_features=10)
-        )
+        self.flatten = tf.keras.layers.Flatten()
+        self.fc = tf.keras.Sequential([
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dense(10)
+        ])
 
-    def forward(self, x):
+    def call(self, x):
         x = self.convolutional(x)
         x = so3_integrate(x)
-        x = self.linear(x)
+        x = self.flatten(x)
+        x = self.fc(x)
         return x
-
 
 
 def main(network):
 
-    train_loader, test_loader, train_dataset, _ = load_data(
-        MNIST_PATH, BATCH_SIZE)
+    train_dataset, test_dataset = load_data(MNIST_PATH, BATCH_SIZE)
 
     if network == 'original':
         classifier = S2ConvNet_original()
@@ -197,52 +185,54 @@ def main(network):
         classifier = S2ConvNet_deep()
     else:
         raise ValueError('Unknown network architecture')
-    classifier.to(DEVICE)
 
-    print("#params", sum(x.numel() for x in classifier.parameters()))
+    print("#params", sum(np.prod(var.shape) for var in classifier.trainable_variables))
 
-    criterion = nn.CrossEntropyLoss()
-    criterion = criterion.to(DEVICE)
+    criterion = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 
-    optimizer = torch.optim.Adam(
-        classifier.parameters(),
-        lr=LEARNING_RATE)
+    classifier.compile(optimizer=optimizer, loss=criterion, metrics=['accuracy'])
+    # Prepare the metrics.
+    train_acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
+    val_acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
+
+    # history = classifier.fit(train_dataset, batch_size=BATCH_SIZE, epochs=NUM_EPOCHS, verbose=1, validation_data=test_dataset)
 
     for epoch in range(NUM_EPOCHS):
-        for i, (images, labels) in enumerate(train_loader):
-            classifier.train()
+        # Iterate over the batches of the dataset.
+        for step, (x_batch_train, y_batch_train) in tqdm(enumerate(train_dataset)):
+            with tf.GradientTape() as tape:
+                logits = classifier(x_batch_train, training=True)
+                loss_value = criterion(y_batch_train, logits)
+            grads = tape.gradient(loss_value, classifier.trainable_weights)
+            optimizer.apply_gradients(zip(grads, classifier.trainable_weights))
 
-            images = images.to(DEVICE)
-            labels = labels.to(DEVICE)
+            # Update training metric.
+            train_acc_metric.update_state(y_batch_train, logits)
 
-            optimizer.zero_grad()
-            outputs = classifier(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
+            # Log every 200 batches.
+            if step % 200 == 0:
+                print(
+                    "Training loss (for one batch) at step %d: %.4f"
+                    % (step, float(loss_value))
+                )
+                print("Seen so far: %d samples" % ((step + 1) * BATCH_SIZE))
 
-            optimizer.step()
+        # Display metrics at the end of each epoch.
+        train_acc = train_acc_metric.result()
+        print("Training acc over epoch: %.4f" % (float(train_acc),))
 
-            print('\rEpoch [{0}/{1}], Iter [{2}/{3}] Loss: {4:.4f}'.format(
-                epoch+1, NUM_EPOCHS, i+1, len(train_dataset)//BATCH_SIZE,
-                loss.item()), end="")
-        print("")
-        correct = 0
-        total = 0
-        for images, labels in test_loader:
+        # Reset training metrics at the end of each epoch
+        train_acc_metric.reset_states()
 
-            classifier.eval()
-
-            with torch.no_grad():
-                images = images.to(DEVICE)
-                labels = labels.to(DEVICE)
-
-                outputs = classifier(images)
-                _, predicted = torch.max(outputs, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).long().sum().item()
-
-        print('Test Accuracy: {0}'.format(100 * correct / total))
-
+        # Run a validation loop at the end of each epoch.
+        for x_batch_val, y_batch_val in test_dataset:
+            val_logits = classifier(x_batch_val, training=False)
+            # Update val metrics
+            val_acc_metric.update_state(y_batch_val, val_logits)
+        val_acc = val_acc_metric.result()
+        val_acc_metric.reset_states()
+        print("Validation acc: %.4f" % (float(val_acc),))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

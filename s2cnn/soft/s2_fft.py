@@ -1,12 +1,8 @@
 # pylint: disable=R,C,E1101,E1102
 from functools import lru_cache
-import torch
-import torch.cuda
 from string import Template
 from s2cnn.utils.decorator import cached_dirpklgz
-import torch.fft
-
-
+import tensorflow as tf
 # inspired by https://gist.github.com/szagoruyko/89f83b6f5f4833d3c8adf81ee49f22a8
 
 
@@ -15,46 +11,54 @@ def s2_fft(x, for_grad=False, b_out=None):
     :param x: [..., beta, alpha, complex]
     :return:  [l * m, ..., complex]
     '''
-    assert x.size(-1) == 2
-    b_in = x.size(-2) // 2
-    assert x.size(-2) == 2 * b_in
-    assert x.size(-3) == 2 * b_in
+    # print(x.shape.as_list())
+    assert x.shape[-1] == 2
+    b_in = x.shape[-2] // 2
+    assert x.shape[-2] == 2 * b_in
+    assert x.shape[-3] == 2 * b_in
     if b_out is None:
         b_out = b_in
     assert b_out <= b_in
-    batch_size = x.size()[:-3]
+    batch_size = x.shape[:-3]
 
-    x = x.view(-1, 2 * b_in, 2 * b_in, 2)  # [batch, beta, alpha, complex]
+    x = tf.reshape(x, (-1, 2 * b_in, 2 * b_in, 2))  # [batch, beta, alpha, complex]
 
     '''
     :param x: [batch, beta, alpha, complex] (nbatch, 2 * b_in, 2 * b_in, 2)
     :return: [l * m, batch, complex] (b_out**2, nbatch, 2)
     '''
     nspec = b_out ** 2
-    nbatch = x.size(0)
+    nbatch = x.shape[0]
 
     wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)
-    wigner = wigner.view(2 * b_in, -1)  # [beta, l * m] (2 * b_in, nspec)
+    wigner = tf.reshape(wigner, (2 * b_in, -1))  # [beta, l * m] (2 * b_in, nspec)
 
-    x = torch.view_as_real(torch.fft.fft(torch.view_as_complex(x)))  # [batch, beta, m, complex]
+    x = tf.stack([tf.math.real(tf.signal.fft(tf.complex(x[:,:,:,0], x[:,:,:,1]))), 
+          tf.math.imag(tf.signal.fft(tf.complex(x[:,:,:,0], x[:,:,:,1])))],
+          axis=-1)  # [batch, beta, m, complex]
+    
+    output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
 
-    output = x.new_empty((nspec, nbatch, 2))
-    if x.is_cuda and x.dtype == torch.float32:
+    if x.device[-4:].startswith('GPU') and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
-        cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
-        stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
-        cuda_kernel(block=(1024, 1, 1),
-                    grid=(cuda_utils.get_blocks(nspec * nbatch, 1024), 1, 1),
-                    args=[x.contiguous().data_ptr(), wigner.contiguous().data_ptr(), output.data_ptr()],
-                    stream=stream)
-        # [l * m, batch, complex]
+        # cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
+        # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+        # cuda_kernel(block=(1024, 1, 1),
+        #             grid=(cuda_utils.get_blocks(nspec * nbatch, 1024), 1, 1),
+        #             args=[x.contiguous().data_ptr(), wigner.contiguous().data_ptr(), output.data_ptr()],
+        #             stream=stream)
+        # [l * m, batch, complex]       
     else:
         for l in range(b_out):
             s = slice(l ** 2, l ** 2 + 2 * l + 1)
-            xx = torch.cat((x[:, :, -l:], x[:, :, :l + 1]), dim=2) if l > 0 else x[:, :, :1]
-            output[s] = torch.einsum("bm,zbmc->mzc", (wigner[:, s], xx))
+            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
 
-    output = output.view(-1, *batch_size, 2)  # [l * m, ..., complex] (nspec, ..., 2)
+            xx = tf.concat((x[:, :, -l:], x[:, :, :l + 1]), axis=2) if l > 0 else x[:, :, :1]
+
+            update = tf.einsum("bm,zbmc->mzc", wigner[:, s], xx)
+            output = tf.tensor_scatter_nd_update(output, indices, update)
+
+    output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m, ..., complex] (nspec, ..., 2)
     return output
 
 
@@ -62,55 +66,72 @@ def s2_ifft(x, for_grad=False, b_out=None):
     '''
     :param x: [l * m, ..., complex]
     '''
-    assert x.size(-1) == 2
-    nspec = x.size(0)
+    assert x.shape[-1] == 2
+    nspec = x.shape[0]
     b_in = round(nspec ** 0.5)
     assert nspec == b_in ** 2
     if b_out is None:
         b_out = b_in
     assert b_out >= b_in
-    batch_size = x.size()[1:-1]
+    batch_size = x.shape[1:-1]
 
-    x = x.view(nspec, -1, 2)  # [l * m, batch, complex] (nspec, nbatch, 2)
+    x = tf.reshape(x, (nspec, -1, 2))  # [l * m, batch, complex] (nspec, nbatch, 2)
 
     '''
     :param x: [l * m, batch, complex] (b_in**2, nbatch, 2)
     :return: [batch, beta, alpha, complex] (nbatch, 2 b_out, 2 * b_out, 2)
     '''
-    nbatch = x.size(1)
+    nbatch = x.shape[1]
 
     wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)
-    wigner = wigner.view(2 * b_out, -1)  # [beta, l * m] (2 * b_out, nspec)
+    wigner = tf.reshape(wigner, (2 * b_out, -1))  # [beta, l * m] (2 * b_out, nspec)
 
-    if x.is_cuda and x.dtype == torch.float32:
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
-        cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
-        stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
-        output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2))
-        cuda_kernel(block=(1024, 1, 1),
-                    grid=(cuda_utils.get_blocks(nbatch * (2 * b_out) ** 2, 1024), 1, 1),
-                    args=[x.data_ptr(), wigner.data_ptr(), output.data_ptr()],
-                    stream=stream)
+        # cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
+        # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+        # output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2))
+        # cuda_kernel(block=(1024, 1, 1),
+        #             grid=(cuda_utils.get_blocks(nbatch * (2 * b_out) ** 2, 1024), 1, 1),
+        #             args=[x.data_ptr(), wigner.data_ptr(), output.data_ptr()],
+        #             stream=stream)
         # [batch, beta, m, complex] (nbatch, 2 * b_out, 2 * b_out, 2)
     else:
-        output = x.new_zeros((nbatch, 2 * b_out, 2 * b_out, 2))
+        output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2), dtype=tf.float32)
         for l in range(b_in):
             s = slice(l ** 2, l ** 2 + 2 * l + 1)
-            out = torch.einsum("mzc,bm->zbmc", (x[s], wigner[:, s]))
-            output[:, :, :l + 1] += out[:, :, -l - 1:]
-            if l > 0:
-                output[:, :, -l:] += out[:, :, :l]
+            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+            
+            out = tf.einsum("mzc,bm->zbmc", x[s], wigner[:, s])
 
-    output = torch.view_as_real(torch.fft.ifft(torch.view_as_complex(output))) * output.size(-2)  # [batch, beta, alpha, complex]
-    output = output.view(*batch_size, 2 * b_out, 2 * b_out, 2)
+            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l+1), indexing='ij'), axis=-1)
+            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l, 2*b_out), indexing='ij'), axis=-1)
+
+            val1 = out[:, :, -l - 1:]
+            val2 = out[:, :, :l]
+
+            output = tf.tensor_scatter_nd_add(output, idx1, val1)
+            if l > 0:
+                output = tf.tensor_scatter_nd_add(output, idx2, val2)
+
+    output = tf.stack([tf.math.real(tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1]))), 
+          tf.math.imag(tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1])))],
+          axis=-1)  * output.shape[-2]  # [batch, beta, alpha, complex]
+    
+    # output = torch.view_as_real(
+    #     torch.fft.ifft(
+    #         torch.view_as_complex(output))) * output.shape[-2]  
+    # [batch, beta, alpha, complex]
+
+    output = tf.reshape(output, (*batch_size, 2 * b_out, 2 * b_out, 2))
     return output
 
 
 @lru_cache(maxsize=32)
 def _setup_wigner(b, nl, weighted, device):
     dss = _setup_s2_fft(b, nl, weighted)
-    dss = torch.tensor(dss, dtype=torch.float32, device=device)  # [beta, l * m] # pylint: disable=E1102
-    return dss.contiguous()
+    dss = tf.constant(dss, dtype=tf.float32)  # [beta, l * m] # pylint: disable=E1102
+    return dss
 
 
 @cached_dirpklgz("cache/setup_s2_fft")
@@ -223,51 +244,65 @@ __global__ void main_(const float* in, const float* wig, float* out) {
     return cuda_utils.compile_kernel(kernel, 's2ifft.cu', 'main_')
 
 
-class S2_fft_real(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, b_out=None):  # pylint: disable=W
-        from s2cnn.utils.complex import as_complex
-        ctx.b_out = b_out
-        ctx.b_in = x.size(-1) // 2
-        return s2_fft(as_complex(x), b_out=ctx.b_out)
+def S2_fft_real(x, b_out: int):
+    b_in = x.shape[-1] // 2
 
-    @staticmethod
-    def backward(ctx, grad_output):  # pylint: disable=W
-        return s2_ifft(grad_output, for_grad=True, b_out=ctx.b_in)[..., 0], None
+    @tf.custom_gradient
+    def forward(x):
+        from s2cnn.utils.complex import as_complex  
+        y = s2_fft(as_complex(x), b_out=b_out)  
+
+        def gradient(dy, variables=None):
+            # print("backprop s2_fft")
+            # print("dy", dy.shape.as_list())
+            dx = s2_ifft(dy, for_grad=True, b_out=b_in)[..., 0] 
+            # print("dx", dx.shape.as_list()) 
+            return dx, None
+        return y, gradient
+
+    return forward(x)
 
 
-class S2_ifft_real(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, b_out=None):  # pylint: disable=W
-        nspec = x.size(0)
-        ctx.b_out = b_out
-        ctx.b_in = round(nspec ** 0.5)
-        return s2_ifft(x, b_out=ctx.b_out)[..., 0]
+def S2_ifft_real(x, b_out=None):
+    nspec = x.size(0)
+    b_in = round(nspec ** 0.5)
 
-    @staticmethod
-    def backward(ctx, grad_output):  # pylint: disable=W
-        from s2cnn.utils.complex import as_complex
-        return s2_fft(as_complex(grad_output), for_grad=True, b_out=ctx.b_in), None
+    @tf.custom_gradient
+    def forward(x):
+        y = s2_ifft(x, b_out=b_out)[..., 0]
+        
+        def gradient(dy, variables=None):
+            from s2cnn.utils.complex import as_complex
+            # print("backprop s2_ifft")
+            dx = s2_fft(as_complex(dy), for_grad=True, b_out=b_in)
+            # print(dx.shape.as_list())
+            return dx, None
+    
+        return y, gradient
 
+    return forward(x)
 
 def test_s2fft_cuda_cpu():
-    x = torch.rand(1, 2, 12, 12, 2)  # [..., beta, alpha, complex]
+    x = tf.random(1, 2, 12, 12, 2)  # [..., beta, alpha, complex]
     z1 = s2_fft(x, b_out=5)
     z2 = s2_fft(x.cuda(), b_out=5).cpu()
     q = (z1 - z2).abs().max().item() / z1.std().item()
-    print(q)
+    # print(q)
     assert q < 1e-4
 
 
 def test_s2ifft_cuda_cpu():
-    x = torch.rand(12 ** 2, 10, 2)  # [l * m, ..., complex]
+    x = tf.random(12 ** 2, 10, 2)  # [l * m, ..., complex]
     z1 = s2_ifft(x, b_out=13)
     z2 = s2_ifft(x.cuda(), b_out=13).cpu()
     q = (z1 - z2).abs().max().item() / z1.std().item()
-    print(q)
+    # print(q)
     assert q < 1e-4
 
 
 if __name__ == "__main__":
     test_s2fft_cuda_cpu()
     test_s2ifft_cuda_cpu()
+
+
+

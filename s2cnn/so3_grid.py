@@ -11,7 +11,7 @@ def so3_near_identity_grid(max_beta=np.pi / 8, max_gamma=2*np.pi, n_alpha=8, n_b
     '''
     if n_gamma is None:
         n_gamma = n_alpha # similar to regular representations
-    beta = np.arange(start=1, stop=n_beta + 1, dtype=np.float) * max_beta / n_beta
+    beta = np.arange(start=1, stop=n_beta + 1, dtype=np.float64) * max_beta / n_beta
     alpha = np.linspace(start=0, stop=2 * np.pi, num=n_alpha, endpoint=False)
     pre_gamma = np.linspace(start=-max_gamma, stop=max_gamma, num=n_gamma, endpoint=True)
     B, A, preC = np.meshgrid(beta, alpha, pre_gamma, indexing='ij')

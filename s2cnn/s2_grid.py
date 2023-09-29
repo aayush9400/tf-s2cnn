@@ -7,7 +7,7 @@ def s2_near_identity_grid(max_beta=np.pi / 8, n_alpha=8, n_beta=3):
     :return: rings around the north pole
     size of the kernel = n_alpha * n_beta
     '''
-    beta = np.arange(start=1, stop=n_beta + 1, dtype=np.float) * max_beta / n_beta
+    beta = np.arange(start=1, stop=n_beta + 1, dtype=np.float64) * max_beta / n_beta
     alpha = np.linspace(start=0, stop=2 * np.pi, num=n_alpha, endpoint=False)
     B, A = np.meshgrid(beta, alpha, indexing='ij')
     B = B.flatten()

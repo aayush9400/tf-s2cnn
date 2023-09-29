@@ -5,32 +5,41 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import imread
 
-import torch
+import tensorflow as tf
 from s2cnn import S2Convolution, SO3Convolution, so3_rotation
 from s2cnn import s2_near_identity_grid, so3_near_identity_grid
 
 
 def s2_rotation(x, a, b, c):
-    x = so3_rotation(x.view(*x.size(), 1).expand(*x.size(), x.size(-1)), a, b, c)
+    x = tf.expand_dims(x, -1)  # Add a new last dimension
+    shape = tf.concat([tf.shape(x)[:-1], [tf.shape(x)[-2]]], 0)  # Create a shape for tiling
+    x = tf.tile(x, shape)  # Tile the tensor along the new last dimension
+
+    x = so3_rotation(x, a, b, c) 
     return x[..., 0]
 
 
 def plot(x, text, normalize=False):
-    assert x.size(0) == 1
-    assert x.size(1) in [1, 3]
+    assert x.shape[0] == 1
+    assert x.shape[1] in [1, 3]
     x = x[0]
-    if x.dim() == 4:
+    if len(x.shape) == 4:
         x = x[..., 0]
 
-    nch = x.size(0)
+    nch = x.shape[0]
     is_rgb = (nch == 3)
 
     if normalize:
-        x = x - x.view(nch, -1).mean(-1).view(nch, 1, 1)
-        x = 0.4 * x / x.view(nch, -1).std(-1).view(nch, 1, 1)
+        x -= tf.reduce_mean(tf.reshape(x, (nch, -1)), axis=-1, keepdims=True)
+        x = 0.4 * x / tf.math.reduce_std(tf.reshape(x, (nch, -1)), axis=-1, keepdims=True)
 
-    x = x.detach().cpu().numpy()
-    x = x.transpose((1, 2, 0)).clip(0, 1)
+    if tf.executing_eagerly():
+        x = x.numpy()  # Convert to numpy array if in eager execution mode
+    else:
+        with tf.Session() as sess:
+            x = x.eval()  # Evaluate the tensor to get a numpy array if in graph mode
+
+    x = np.transpose(x, (1, 2, 0)).clip(0, 1)
 
     print(x.shape)
     if is_rgb:
@@ -47,26 +56,24 @@ def plot(x, text, normalize=False):
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0"
 
     # load image
     x = imread("earth128.jpg").astype(np.float32).transpose((2, 0, 1)) / 255
     b = 64
-    x = torch.tensor(x, dtype=torch.float, device=device)
-    x = x.view(1, 3, 2 * b, 2 * b)
+    x = tf.convert_to_tensor(x, dtype=tf.float32)
+    x = tf.reshape(x, (1, 3, 2*b, 2*b))
 
     # equivariant transformation
     s2_grid = s2_near_identity_grid(max_beta=0.2, n_alpha=12, n_beta=1)
     s2_conv = S2Convolution(3, 50, b_in=b, b_out=b, grid=s2_grid)
-    s2_conv.to(device)
 
     so3_grid = so3_near_identity_grid(max_beta=0.2, n_alpha=12, n_beta=1)
     so3_conv = SO3Convolution(50, 1, b_in=b, b_out=b, grid=so3_grid)
-    so3_conv.to(device)
 
     def phi(x):
         x = s2_conv(x)
-        x = torch.nn.functional.softplus(x)
+        x = tf.math.softplus(x)
         x = so3_conv(x)
         return x
 

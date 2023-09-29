@@ -1,8 +1,7 @@
 # pylint: disable=R,C,E1101,E1102
 import math
 from functools import lru_cache
-import torch
-import torch.cuda
+import tensorflow as tf
 from s2cnn.utils.decorator import cached_dirpklgz
 
 
@@ -14,50 +13,71 @@ def so3_fft(x, for_grad=False, b_out=None):
     :param x: [..., beta, alpha, gamma, complex]
     :return: [l * m * n, ..., complex]
     '''
-    assert x.size(-1) == 2, x.size()
-    b_in = x.size(-2) // 2
-    assert x.size(-2) == 2 * b_in
-    assert x.size(-3) == 2 * b_in
-    assert x.size(-4) == 2 * b_in
+    assert x.shape[-1] == 2, x.shape.as_list()
+    b_in = x.shape[-2] // 2
+    assert x.shape[-2] == 2 * b_in
+    assert x.shape[-3] == 2 * b_in
+    assert x.shape[-4] == 2 * b_in
     if b_out is None:
         b_out = b_in
-    batch_size = x.size()[:-4]
+    batch_size = x.shape[:-4]
 
-    x = x.view(-1, 2 * b_in, 2 * b_in, 2 * b_in, 2)  # [batch, beta, alpha, gamma, complex]
+    x = tf.reshape(x, (-1, 2 * b_in, 2 * b_in, 2 * b_in, 2))  # [batch, beta, alpha, gamma, complex]
 
     '''
     :param x: [batch, beta, alpha, gamma, complex] (nbatch, 2 b_in, 2 b_in, 2 b_in, 2)
     :return: [l * m * n, batch, complex] (b_out (4 b_out**2 - 1) // 3, nbatch, 2)
     '''
     nspec = b_out * (4 * b_out ** 2 - 1) // 3
-    nbatch = x.size(0)
+    nbatch = x.shape[0]
 
     wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)  # [beta, l * m * n]
 
-    x = torch.view_as_real(torch.fft.fftn(torch.view_as_complex(x),dim=[2,3]))  # [batch, beta, m, n, complex]
+    x = tf.stack([tf.math.real(tf.signal.fft2d(tf.complex(x[..., 0], x[..., 1])) ), 
+                  tf.math.imag(tf.signal.fft2d(tf.complex(x[..., 0], x[..., 1])) )], axis=-1) # [batch, beta, m, n, complex] 
 
-    output = x.new_empty((nspec, nbatch, 2))
-    if x.is_cuda and x.dtype == torch.float32:
+    output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=False, device=x.device.index)
         cuda_kernel(x, wigner, output)  # [l * m * n, batch, complex]
     else:
         if b_in < b_out:
-            output.fill_(0)
+            output = tf.zeros_like(output)
         for l in range(b_out):
-            s = slice(l * (4 * l ** 2 - 1) // 3, l * (4 * l ** 2 - 1) // 3 + (2 * l + 1) ** 2)
+            start = l * (4 * l**2 - 1) // 3
+            end = start + (2 * l + 1) ** 2
+            s = slice(start, end)
+            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+
             l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
-            xx = x.new_zeros((x.size(0), x.size(1), 2 * l + 1, 2 * l + 1, 2))
-            xx[:, :, l: l + l1 + 1, l: l + l1 + 1] = x[:, :, :l1 + 1, :l1 + 1]
+            xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
+            # print("so3 xx", xx.shape.as_list(), x.shape.as_list())
+            # Creating array of indices for each slice
+            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
+            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
+
+            # Extracting values corresponding to the created indices
+            val1 = x[:, :, :l1 + 1, :l1 + 1]
+            val2 = x[:, :, -l1:, :l1 + 1]
+            val3 = x[:, :, :l1 + 1, -l1:]
+            val4 = x[:, :, -l1:, -l1:]
+
+            # Adding the extracted values to the output tensor
+            xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
             if l1 > 0:
-                xx[:, :, l - l1:l, l: l + l1 + 1] = x[:, :, -l1:, :l1 + 1]
-                xx[:, :, l: l + l1 + 1, l - l1:l] = x[:, :, :l1 + 1, -l1:]
-                xx[:, :, l - l1:l, l - l1:l] = x[:, :, -l1:, -l1:]
+                xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
+                xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
+                xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
 
-            out = torch.einsum("bmn,zbmnc->mnzc", (wigner[:, s].view(-1, 2 * l + 1, 2 * l + 1), xx))
-            output[s] = out.view((2 * l + 1) ** 2, -1, 2)
-
-    output = output.view(-1, *batch_size, 2)  # [l * m * n, ..., complex]
+            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+            # print("so3 ww", xx.shape.as_list(), ww.shape.as_list())
+            out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
+            output = tf.tensor_scatter_nd_update(output, indices, out)
+    
+    output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m * n, ..., complex]
     return output
 
 
@@ -66,49 +86,69 @@ def so3_rfft(x, for_grad=False, b_out=None):
     :param x: [..., beta, alpha, gamma]
     :return: [l * m * n, ..., complex]
     '''
-    b_in = x.size(-1) // 2
-    assert x.size(-1) == 2 * b_in
-    assert x.size(-2) == 2 * b_in
-    assert x.size(-3) == 2 * b_in
+    b_in = x.shape[-1] // 2
+    assert x.shape[-1] == 2 * b_in
+    assert x.shape[-2] == 2 * b_in
+    assert x.shape[-3] == 2 * b_in
     if b_out is None:
         b_out = b_in
-    batch_size = x.size()[:-3]
+    batch_size = x.shape[:-3]
 
-    x = x.contiguous().view(-1, 2 * b_in, 2 * b_in, 2 * b_in)  # [batch, beta, alpha, gamma]
-
+    x = tf.reshape(x, (-1, 2 * b_in, 2 * b_in, 2 * b_in)) # [batch, beta, alpha, gamma]
     '''
     :param x: [batch, beta, alpha, gamma] (nbatch, 2 b_in, 2 b_in, 2 b_in)
     :return: [l * m * n, batch, complex] (b_out (4 b_out**2 - 1) // 3, nbatch, 2)
     '''
     nspec = b_out * (4 * b_out ** 2 - 1) // 3
-    nbatch = x.size(0)
+    nbatch = x.shape[0]
 
     wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)
 
-    output = x.new_empty((nspec, nbatch, 2))
-    if x.is_cuda and x.dtype == torch.float32:
-        x = torch.view_as_real(torch.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
+    output = tf.zeros((nspec, nbatch, 2), dtype=x.dtype)
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+        x = tf.view_as_real(tf.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
         cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=True, device=x.device.index)
         cuda_kernel(x, wigner, output)
     else:
-        x = torch.view_as_real(torch.fft.rfftn(torch.view_as_complex(torch.stack((x, torch.zeros_like(x)), dim=-1)), dim=[2,3]))
+        x = tf.stack([tf.math.real(tf.signal.rfft2d(x)),tf.math.imag(tf.signal.rfft2d(x))], axis=-1)
+
         if b_in < b_out:
-            output.fill_(0)
+            output = tf.zeros_like(output)
         for l in range(b_out):
-            s = slice(l * (4 * l**2 - 1) // 3, l * (4 * l**2 - 1) // 3 + (2 * l + 1) ** 2)
+            start = l * (4 * l**2 - 1) // 3
+            end = start + (2 * l + 1) ** 2
+            s = slice(start, end)
+            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+
             l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
-            xx = x.new_zeros((x.size(0), x.size(1), 2 * l + 1, 2 * l + 1, 2))
-            xx[:, :, l: l + l1 + 1, l: l + l1 + 1] = x[:, :, :l1 + 1, :l1 + 1]
-            if l1 > 0:
-                xx[:, :, l - l1:l, l: l + l1 + 1] = x[:, :, -l1:, :l1 + 1]
-                xx[:, :, l: l + l1 + 1, l - l1:l] = x[:, :, :l1 + 1, -l1:]
-                xx[:, :, l - l1:l, l - l1:l] = x[:, :, -l1:, -l1:]
+            xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
+            # print("so3 xx", xx.shape.as_list(), x.shape.as_list())
+            # Creating array of indices for each slice
+            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
+            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
 
-            out = torch.einsum("bmn,zbmnc->mnzc", (wigner[:, s].view(-1, 2 * l + 1, 2 * l + 1), xx))
-            output[s] = out.view((2 * l + 1) ** 2, -1, 2)
+            # Extracting values corresponding to the created indices
+            val1 = x[:, :, :l1 + 1, :l1 + 1]
+            val2 = x[:, :, -l1:, :l1 + 1]
+            val3 = x[:, :, :l1 + 1, -l1:]
+            val4 = x[:, :, -l1:, -l1:]
+
+            # Adding the extracted values to the output tensor
+            xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
+            if l1 > 0:
+                xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
+                xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
+                xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
+
+            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+            # print("so3 ww", xx.shape.as_list(), ww.shape.as_list())
+            out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
+            output = tf.tensor_scatter_nd_update(output, indices, out)
     
-    output = output.view(-1, *batch_size, 2)  # [l * m * n, ..., complex]
+    output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m * n, ..., complex]
     return output
 
 
@@ -116,42 +156,69 @@ def so3_ifft(x, for_grad=False, b_out=None):
     '''
     :param x: [l * m * n, ..., complex]
     '''
-    assert x.size(-1) == 2
-    nspec = x.size(0)
+    assert x.shape[-1] == 2
+    nspec = x.shape[0]
     b_in = round((3 / 4 * nspec) ** (1 / 3))
     assert nspec == b_in * (4 * b_in ** 2 - 1) // 3
     if b_out is None:
         b_out = b_in
-    batch_size = x.size()[1:-1]
+    batch_size = x.shape[1:-1]
 
-    x = x.view(nspec, -1, 2)  # [l * m * n, batch, complex] (nspec, nbatch, 2)
+    x = tf.reshape(x, (nspec, -1, 2))  # [l * m * n, batch, complex] (nspec, nbatch, 2)
 
     '''
     :param x: [l * m * n, batch, complex] (b_in (4 b_in**2 - 1) // 3, nbatch, 2)
     :return: [batch, beta, alpha, gamma, complex] (nbatch, 2 b_out, 2 b_out, 2 b_out, 2)
     '''
-    nbatch = x.size(1)
+    nbatch = x.shape[1]
 
-    wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)  # [beta, l * m * n] (2 * b_out, nspec)
+    wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad)  # [beta, l * m * n] (2 * b_out, nspec)
 
-    output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2))
-    if x.is_cuda and x.dtype == torch.float32:
+    output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2), dtype=x.dtype)
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=False, device=x.device.index)
         cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
     else:
-        output.fill_(0)
+        output = tf.zeros_like(output)
         for l in range(min(b_in, b_out)):
-            s = slice(l * (4 * l**2 - 1) // 3, l * (4 * l**2 - 1) // 3 + (2 * l + 1) ** 2)
-            out = torch.einsum("mnzc,bmn->zbmnc", (x[s].view(2 * l + 1, 2 * l + 1, -1, 2), wigner[:, s].view(-1, 2 * l + 1, 2 * l + 1)))
-            l1 = min(l, b_out - 1)  # if b_out < b_in
-            output[:, :, :l1 + 1, :l1 + 1] += out[:, :, l: l + l1 + 1, l: l + l1 + 1]
-            if l > 0:
-                output[:, :, -l1:, :l1 + 1] += out[:, :, l - l1: l, l: l + l1 + 1]
-                output[:, :, :l1 + 1, -l1:] += out[:, :, l: l + l1 + 1, l - l1: l]
-                output[:, :, -l1:, -l1:] += out[:, :, l - l1: l, l - l1: l]
+            start = l * (4 * l**2 - 1) // 3
+            end = start + (2 * l + 1)**2
+            s = slice(start, end)
+            
+            xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
+            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+            out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
 
-    output = torch.view_as_real(torch.fft.ifftn(torch.view_as_complex(output), dim=[2,3])) * output.size(-2) ** 2  # [batch, beta, alpha, gamma, complex]    
-    output = output.view(*batch_size, 2 * b_out, 2 * b_out, 2 * b_out, 2)
+            l1 = min(l, b_out - 1)  # if b_out < b_in
+
+            # Creating array of indices for each slice
+            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
+            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
+            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+
+            # Extracting values corresponding to the created indices
+            val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
+            val2 = out[:, :, l - l1: l, l: l + l1 + 1]
+            val3 = out[:, :, l: l + l1 + 1, l - l1: l]
+            val4 = out[:, :, l - l1: l, l - l1: l]
+
+            # Adding the extracted values to the output tensor
+            output = tf.tensor_scatter_nd_add(output, idx1, val1)
+            if l > 0:
+                output = tf.tensor_scatter_nd_add(output, idx2, val2)
+                output = tf.tensor_scatter_nd_add(output, idx3, val3)
+                output = tf.tensor_scatter_nd_add(output, idx4, val4)
+    # print(output.shape.as_list())
+    complex_output = tf.complex(output[..., 0], output[..., 1])
+    ifft_output = tf.signal.ifft2d(tf.transpose(complex_output, perm=[0, 3, 1, 2]))
+    ifft_output = tf.transpose(ifft_output, perm=[0, 2, 3, 1])
+    real_output = tf.math.real(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
+    complex_output = tf.math.imag(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
+    output = tf.stack([real_output, complex_output], axis=-1)
+    # print(output.shape.as_list())
+    output = tf.reshape(output, [*batch_size, 2 * b_out, 2 * b_out, 2 * b_out, 2])
+    # print(output.shape.as_list())
     return output
 
 
@@ -159,54 +226,77 @@ def so3_rifft(x, for_grad=False, b_out=None):
     '''
     :param x: [l * m * n, ..., complex]
     '''
-    assert x.size(-1) == 2
-    nspec = x.size(0)
+    assert x.shape[-1] == 2
+    nspec = x.shape[0]
     b_in = round((3 / 4 * nspec) ** (1 / 3))
-    assert nspec == b_in * (4 * b_in ** 2 - 1) // 3
+    assert nspec == b_in * (4 * b_in**2 - 1) // 3
     if b_out is None:
         b_out = b_in
-    batch_size = x.size()[1:-1]
+    batch_size = x.shape[1:-1]
 
-    x = x.view(nspec, -1, 2)  # [l * m * n, batch, complex] (nspec, nbatch, 2)
+    x = tf.reshape(x, (nspec, -1, 2))  # [l * m * n, batch, complex] (nspec, nbatch, 2)
 
     '''
     :param x: [l * m * n, batch, complex] (b_in (4 b_in**2 - 1) // 3, nbatch, 2)
     :return: [batch, beta, alpha, gamma] (nbatch, 2 b_out, 2 b_out, 2 b_out)
     '''
-    nbatch = x.size(1)
+    nbatch = x.shape[1]
 
     wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)  # [beta, l * m * n] (2 * b_out, nspec)
 
-    output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2))
-    if x.is_cuda and x.dtype == torch.float32:
+    output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2), dtype=x.dtype)
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=True, device=x.device.index)
         cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
     else:
-        # TODO can be optimized knowing that the output is real, like in _setup_so3ifft_cuda_kernel(real_output=True)
-        output.fill_(0)
         for l in range(min(b_in, b_out)):
-            s = slice(l * (4 * l**2 - 1) // 3, l * (4 * l**2 - 1) // 3 + (2 * l + 1) ** 2)
-            out = torch.einsum("mnzc,bmn->zbmnc", (x[s].view(2 * l + 1, 2 * l + 1, -1, 2), wigner[:, s].view(-1, 2 * l + 1, 2 * l + 1)))
+            start = l * (4 * l**2 - 1) // 3
+            end = start + (2 * l + 1)**2
+            s = slice(start, end)
+            
+            xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
+            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+            out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
+
             l1 = min(l, b_out - 1)  # if b_out < b_in
-            output[:, :, :l1 + 1, :l1 + 1] += out[:, :, l: l + l1 + 1, l: l + l1 + 1]
+
+            # Creating array of indices for each slice
+            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
+            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
+            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+
+            # Extracting values corresponding to the created indices
+            val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
+            val2 = out[:, :, l - l1: l, l: l + l1 + 1]
+            val3 = out[:, :, l: l + l1 + 1, l - l1: l]
+            val4 = out[:, :, l - l1: l, l - l1: l]
+
+            # Adding the extracted values to the output tensor
+            output = tf.tensor_scatter_nd_add(output, idx1, val1)
             if l > 0:
-                output[:, :, -l1:, :l1 + 1] += out[:, :, l - l1: l, l: l + l1 + 1]
-                output[:, :, :l1 + 1, -l1:] += out[:, :, l: l + l1 + 1, l - l1: l]
-                output[:, :, -l1:, -l1:] += out[:, :, l - l1: l, l - l1: l]
+                output = tf.tensor_scatter_nd_add(output, idx2, val2)
+                output = tf.tensor_scatter_nd_add(output, idx3, val3)
+                output = tf.tensor_scatter_nd_add(output, idx4, val4)
 
-    output = torch.view_as_real(torch.fft.ifftn(torch.view_as_complex(output), dim=[2,3])) * output.size(-2) ** 2  # [batch, beta, alpha, gamma, complex]
+    complex_output = tf.complex(output[..., 0], output[..., 1])
+    ifft_output = tf.signal.ifft2d(tf.transpose(complex_output, perm=[0, 3, 1, 2]))
+    ifft_output = tf.transpose(ifft_output, perm=[0, 2, 3, 1])
+    real_output = tf.math.real(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
+    complex_output = tf.math.imag(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
+    output = tf.stack([real_output, complex_output], axis=-1)
+
     output = output[..., 0]  # [batch, beta, alpha, gamma]
-    output = output.contiguous()
+    output = tf.reshape(output, [*batch_size, 2 * b_out, 2 * b_out, 2 * b_out])
 
-    output = output.view(*batch_size, 2 * b_out, 2 * b_out, 2 * b_out)
     return output
 
 
 @lru_cache(maxsize=32)
-def _setup_wigner(b, nl, weighted, device):
+def _setup_wigner(b, nl, weighted, device=None):
     dss = _setup_so3_fft(b, nl, weighted)
-    dss = torch.tensor(dss, dtype=torch.float32, device=device)  # [beta, l * m * n] # pylint: disable=E1102
-    return dss.contiguous()
+    dss = tf.constant(dss, dtype=tf.float32)  # [beta, l * m * n] # pylint: disable=E1102
+    return dss
 
 
 @cached_dirpklgz("cache/setup_so3_fft")
@@ -338,7 +428,7 @@ __global__ void main_(const float* in, const float* wig, float* out)
 '''
     import s2cnn.utils.cuda as cuda_utils
     kernel = cuda_utils.compile_kernel(kernel, 'so3fft.cu', 'main_')
-    stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+    stream = cuda_utils.Stream(ptr=tf.cuda.current_stream().cuda_stream)
 
     def fun(x, wigner, output):
         assert output.is_contiguous()
@@ -431,7 +521,7 @@ __global__ void main_(const float* in, const float* wig, float* out)
 '''
     import s2cnn.utils.cuda as cuda_utils
     kernel = cuda_utils.compile_kernel(kernel, 'so3ifft.cu', 'main_')
-    stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+    stream = cuda_utils.Stream(ptr=tf.cuda.current_stream().cuda_stream)
 
     def fun(x, wigner, output):
         output[:] = 0
@@ -443,27 +533,38 @@ __global__ void main_(const float* in, const float* wig, float* out)
     return fun
 
 
-class SO3_fft_real(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, b_out=None):  # pylint: disable=W
-        ctx.b_out = b_out
-        ctx.b_in = x.size(-1) // 2
-        return so3_rfft(x, b_out=ctx.b_out)
+def SO3_fft_real(x, b_out: int):
+    b_in = x.shape[-1] // 2
 
-    @staticmethod
-    def backward(self, grad_output):  # pylint: disable=W
-        # ifft of grad_output is not necessarily real, therefore we cannot use rifft
-        return so3_ifft(grad_output, for_grad=True, b_out=self.b_in)[..., 0], None
+    @tf.custom_gradient
+    def forward(x):
+        y = so3_rfft(x, b_out=b_out)
+
+        def gradient(dy, variables=None):
+            # print("backprop so3_fft")
+            dx = so3_ifft(dy, for_grad=True, b_out=b_in)[..., 0]  
+            # print(dx.shape.as_list())
+            return dx
+        
+        return y, gradient
+
+    return forward(x)
 
 
-class SO3_ifft_real(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, b_out=None):  # pylint: disable=W
-        nspec = x.size(0)
-        ctx.b_out = b_out
-        ctx.b_in = round((3 / 4 * nspec) ** (1 / 3))
-        return so3_rifft(x, b_out=ctx.b_out)
+def SO3_ifft_real(x, b_out: int):
+    nspec = x.shape[0]
+    b_in = round((3 / 4 * nspec) ** (1 / 3))
 
-    @staticmethod
-    def backward(ctx, grad_output):  # pylint: disable=W
-        return so3_rfft(grad_output, for_grad=True, b_out=ctx.b_in), None
+    @tf.custom_gradient
+    def forward(x):  # pylint: disable=W
+        y = so3_rifft(x, b_out=b_out) 
+
+        def gradient(dy, variables=None):  # pylint: disable=W
+            # print("backprop so3_ifft")
+            dx = so3_rfft(dy, for_grad=True, b_out=b_in)
+            # print(dx.shape.as_list())
+            return dx
+        
+        return y, gradient
+
+    return forward(x)
