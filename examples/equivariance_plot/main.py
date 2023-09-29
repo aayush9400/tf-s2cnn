@@ -11,10 +11,16 @@ from s2cnn import s2_near_identity_grid, so3_near_identity_grid
 
 
 def s2_rotation(x, a, b, c):
-    x = tf.expand_dims(x, -1)  # Add a new last dimension
-    shape = tf.concat([tf.shape(x)[:-1], [tf.shape(x)[-2]]], 0)  # Create a shape for tiling
-    x = tf.tile(x, shape)  # Tile the tensor along the new last dimension
+    shape = tf.shape(x)
 
+    # Add a new dimension to get a shape similar to [1, 3, 128, 128, 1]
+    x = tf.expand_dims(x, axis=-1)
+
+    # Create the multiples dynamically
+    multiples = tf.concat([tf.ones_like(shape, dtype=tf.int32), [shape[-1]]], axis=0)
+
+    # Tile the tensor to get the final expanded shape
+    x = tf.tile(x, multiples)
     x = so3_rotation(x, a, b, c) 
     return x[..., 0]
 
