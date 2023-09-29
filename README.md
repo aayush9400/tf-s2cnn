@@ -1,5 +1,5 @@
 # Spherical CNNs
-## Equivariant CNNs for the sphere and SO(3) implemented in PyTorch
+## Equivariant CNNs for the sphere and SO(3) implemented in TensorFlow
 
 ![Equivariance](https://github.com/jonas-koehler/s2cnn/raw/master/examples/equivariance_plot/fig.jpeg)
 
