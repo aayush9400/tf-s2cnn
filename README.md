@@ -18,7 +18,7 @@ conda create --name cuda9 python=3.6
 conda activate cuda9
 
 # s2cnn deps
-#conda install tensorflow  # get correct command line at https://www.tensorflow.org/
+conda install tensorflow  # get correct command line at https://www.tensorflow.org/
 pip install pynvrtc joblib
 
 # lie_learn deps
