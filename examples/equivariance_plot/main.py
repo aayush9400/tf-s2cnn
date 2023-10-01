@@ -13,14 +13,10 @@ from s2cnn import s2_near_identity_grid, so3_near_identity_grid
 def s2_rotation(x, a, b, c):
     shape = tf.shape(x)
 
-    # Add a new dimension to get a shape similar to [1, 3, 128, 128, 1]
     x = tf.expand_dims(x, axis=-1)
-
-    # Create the multiples dynamically
     multiples = tf.concat([tf.ones_like(shape, dtype=tf.int32), [shape[-1]]], axis=0)
-
-    # Tile the tensor to get the final expanded shape
     x = tf.tile(x, multiples)
+
     x = so3_rotation(x, a, b, c) 
     return x[..., 0]
 
@@ -88,7 +84,12 @@ def main():
 
     y1 = phi(s2_rotation(x, *abc))
     y2 = so3_rotation(phi(x), *abc)
-    print((y1 - y2).std().item(), y1.std().item())
+
+    difference_std = tf.math.reduce_std(y1 - y2)
+    y1_std = tf.math.reduce_std(y1)
+
+    # Print the standard deviations
+    print(difference_std.numpy(), y1_std.numpy())
 
     plt.figure(figsize=(12, 8))
 
