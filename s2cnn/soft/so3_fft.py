@@ -106,7 +106,7 @@ def so3_rfft(x, for_grad=False, b_out=None):
 
     output = tf.zeros((nspec, nbatch, 2), dtype=x.dtype)
     if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        x = tf.view_as_real(tf.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
+        x = tf.stack([tf.math.real(tf.signal.rfft2d(x)),tf.math.imag(tf.signal.rfft2d(x))], axis=-1)  # [batch, beta, m, n, complex]
         cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=True, device=x.device.index)
         cuda_kernel(x, wigner, output)
     else:
