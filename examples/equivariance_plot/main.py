@@ -1,4 +1,7 @@
 # pylint: disable=C,R,E1101,E1102
+import sys
+sys.path.append("../../")
+
 import numpy as np
 import matplotlib
 matplotlib.use('agg')
