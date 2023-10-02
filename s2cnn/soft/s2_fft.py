@@ -39,7 +39,7 @@ def s2_fft(x, for_grad=False, b_out=None):
     
     output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
     # TO DO
-    if len(tf.config.experimental.list_physical_devices('GPU')) == 0 and x.dtype == tf.float32:
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
         # cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
         # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
@@ -86,7 +86,7 @@ def s2_ifft(x, for_grad=False, b_out=None):
     wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)
     wigner = tf.reshape(wigner, (2 * b_out, -1))  # [beta, l * m] (2 * b_out, nspec)
 
-    if len(tf.config.experimental.list_physical_devices('GPU')) == 0 and x.dtype == tf.float32:
+    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
         # cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
         # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
