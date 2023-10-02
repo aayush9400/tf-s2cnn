@@ -1,4 +1,7 @@
 # pylint: disable=E1101,R,C
+import sys
+sys.path.append("../../")
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models

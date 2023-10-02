@@ -1,4 +1,7 @@
 # pylint: disable=E1101,R,C
+import sys
+sys.path.append("../../")
+
 import numpy as np
 from s2cnn import SO3Convolution
 from s2cnn import S2Convolution

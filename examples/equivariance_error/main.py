@@ -7,6 +7,9 @@ For simplicity, R is a rotation around the Z axis.
 '''
 
 #pylint: disable=C,R,E1101,W0621
+import sys
+sys.path.append("../../")
+
 import tensorflow as tf
 
 from s2cnn import s2_equatorial_grid, S2Convolution
