@@ -37,9 +37,7 @@ def load_data(path, batch_size):
     
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data, train_labels)).batch(batch_size)
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data, test_labels)).batch(batch_size)
-    # for i in train_dataset.as_numpy_iterator():
-    #     print(i[0].shape, i[1].shape)
-    #     break
+
     return train_dataset, test_dataset
 
 
@@ -77,17 +75,14 @@ class S2ConvNet_original(tf.keras.Model):
     def call(self, x):
         x = tf.reshape(x, (BATCH_SIZE,1,60,60))
         x = self.conv1(x)
-        # print(x.shape.as_list())
         x = tf.keras.activations.relu(x)
-        # print(x.shape.as_list())
+
         x = self.conv2(x)
-        # print(x.shape.as_list())
         x = tf.keras.activations.relu(x)
-        # print(x.shape.as_list())
+
         x = so3_integrate(x)
-        # print(x.shape.as_list())
+
         x = self.fc(x)
-        # print("model", x.shape.as_list())
         return x
 
 

@@ -3,8 +3,6 @@ import sys
 sys.path.append("../../")
 
 import numpy as np
-import matplotlib
-matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import imread
 
@@ -16,9 +14,8 @@ from s2cnn import s2_near_identity_grid, so3_near_identity_grid
 def s2_rotation(x, a, b, c):
     shape = tf.shape(x)
 
-    x = tf.expand_dims(x, axis=-1)
     multiples = tf.concat([tf.ones_like(shape, dtype=tf.int32), [shape[-1]]], axis=0)
-    x = tf.tile(x, multiples)
+    x = tf.tile(tf.expand_dims(x, axis=-1), multiples)
 
     x = so3_rotation(x, a, b, c) 
     return x[..., 0]
@@ -33,20 +30,14 @@ def plot(x, text, normalize=False):
 
     nch = x.shape[0]
     is_rgb = (nch == 3)
-
+    
     if normalize:
         x -= tf.reduce_mean(tf.reshape(x, (nch, -1)), axis=-1, keepdims=True)
         x = 0.4 * x / tf.math.reduce_std(tf.reshape(x, (nch, -1)), axis=-1, keepdims=True)
 
-    if tf.executing_eagerly():
-        x = x.numpy()  # Convert to numpy array if in eager execution mode
-    else:
-        with tf.Session() as sess:
-            x = x.eval()  # Evaluate the tensor to get a numpy array if in graph mode
-
+    x = x.numpy() 
     x = np.transpose(x, (1, 2, 0)).clip(0, 1)
 
-    print(x.shape)
     if is_rgb:
         plt.imshow(x)
     else:

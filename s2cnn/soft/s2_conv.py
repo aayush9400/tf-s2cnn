@@ -45,9 +45,11 @@ class S2Convolution(tf.keras.layers.Layer):
         assert x.shape[3] == 2 * self.b_in
 
         x = S2_fft_real(x, self.b_out)  # [l * m, batch, feature_in, complex]
+
         y = s2_rft(self.kernel * self.scaling, self.b_out, self.grid)  # [l * m, feature_in, feature_out, complex]
+
         z = s2_mm(x, y)  # [l * m * n, batch, feature_out, complex]
         z = SO3_ifft_real(z, b_out=None)  # [batch, feature_out, beta, alpha, gamma]
+
         z = z + self.bias
-        # print("s2 layer", z.shape.as_list())
         return z
