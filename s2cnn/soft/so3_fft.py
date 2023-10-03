@@ -1,4 +1,7 @@
 # pylint: disable=R,C,E1101,E1102
+import sys
+sys.path.append("../../")
+
 import math
 from functools import lru_cache
 import tensorflow as tf
@@ -33,8 +36,9 @@ def so3_fft(x, for_grad=False, b_out=None):
 
     wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)  # [beta, l * m * n]
 
-    x = tf.stack([tf.math.real(tf.signal.fft2d(tf.complex(x[..., 0], x[..., 1])) ), 
-                  tf.math.imag(tf.signal.fft2d(tf.complex(x[..., 0], x[..., 1])) )], axis=-1) # [batch, beta, m, n, complex] 
+    fft_x = tf.signal.fft2d(tf.complex(x[..., 0], x[..., 1]))
+    x = tf.stack([tf.math.real(fft_x), 
+                  tf.math.imag(fft_x)], axis=-1) # [batch, beta, m, n, complex] 
 
     output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
     if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
@@ -52,7 +56,7 @@ def so3_fft(x, for_grad=False, b_out=None):
             l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
             xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
-            # print("so3 xx", xx.shape.as_list(), x.shape.as_list())
+
             # Creating array of indices for each slice
             idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
             idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
@@ -73,7 +77,6 @@ def so3_fft(x, for_grad=False, b_out=None):
                 xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
 
             ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            # print("so3 ww", xx.shape.as_list(), ww.shape.as_list())
             out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
             output = tf.tensor_scatter_nd_update(output, indices, out)
     
@@ -106,11 +109,12 @@ def so3_rfft(x, for_grad=False, b_out=None):
 
     output = tf.zeros((nspec, nbatch, 2), dtype=x.dtype)
     if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        x = tf.stack([tf.math.real(tf.signal.rfft2d(x)),tf.math.imag(tf.signal.rfft2d(x))], axis=-1)  # [batch, beta, m, n, complex]
+        x = tf.view_as_real(tf.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
         cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=True, device=x.device.index)
         cuda_kernel(x, wigner, output)
     else:
-        x = tf.stack([tf.math.real(tf.signal.rfft2d(x)),tf.math.imag(tf.signal.rfft2d(x))], axis=-1)
+        fft_x = tf.signal.rfft2d(x)
+        x = tf.stack([tf.math.real(fft_x),tf.math.imag(fft_x)], axis=-1)
 
         if b_in < b_out:
             output = tf.zeros_like(output)
@@ -123,7 +127,7 @@ def so3_rfft(x, for_grad=False, b_out=None):
             l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
             xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
-            # print("so3 xx", xx.shape.as_list(), x.shape.as_list())
+
             # Creating array of indices for each slice
             idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
             idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
@@ -144,7 +148,6 @@ def so3_rfft(x, for_grad=False, b_out=None):
                 xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
 
             ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            # print("so3 ww", xx.shape.as_list(), ww.shape.as_list())
             out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
             output = tf.tensor_scatter_nd_update(output, indices, out)
     
@@ -209,16 +212,13 @@ def so3_ifft(x, for_grad=False, b_out=None):
                 output = tf.tensor_scatter_nd_add(output, idx2, val2)
                 output = tf.tensor_scatter_nd_add(output, idx3, val3)
                 output = tf.tensor_scatter_nd_add(output, idx4, val4)
-    # print(output.shape.as_list())
-    complex_output = tf.complex(output[..., 0], output[..., 1])
-    ifft_output = tf.signal.ifft2d(tf.transpose(complex_output, perm=[0, 3, 1, 2]))
-    ifft_output = tf.transpose(ifft_output, perm=[0, 2, 3, 1])
-    real_output = tf.math.real(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
-    complex_output = tf.math.imag(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
-    output = tf.stack([real_output, complex_output], axis=-1)
-    # print(output.shape.as_list())
+
+    ifft_output = tf.signal.ifft2d(tf.complex(output[..., 0], output[..., 1]))
+    output = tf.stack([tf.math.real(ifft_output), 
+                       tf.math.imag(ifft_output)], axis=-1) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
+
     output = tf.reshape(output, [*batch_size, 2 * b_out, 2 * b_out, 2 * b_out, 2])
-    # print(output.shape.as_list())
+
     return output
 
 
@@ -235,7 +235,7 @@ def so3_rifft(x, for_grad=False, b_out=None):
     batch_size = x.shape[1:-1]
 
     x = tf.reshape(x, (nspec, -1, 2))  # [l * m * n, batch, complex] (nspec, nbatch, 2)
-
+    
     '''
     :param x: [l * m * n, batch, complex] (b_in (4 b_in**2 - 1) // 3, nbatch, 2)
     :return: [batch, beta, alpha, gamma] (nbatch, 2 b_out, 2 b_out, 2 b_out)
@@ -279,16 +279,12 @@ def so3_rifft(x, for_grad=False, b_out=None):
                 output = tf.tensor_scatter_nd_add(output, idx3, val3)
                 output = tf.tensor_scatter_nd_add(output, idx4, val4)
 
-    complex_output = tf.complex(output[..., 0], output[..., 1])
-    ifft_output = tf.signal.ifft2d(tf.transpose(complex_output, perm=[0, 3, 1, 2]))
-    ifft_output = tf.transpose(ifft_output, perm=[0, 2, 3, 1])
-    real_output = tf.math.real(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
-    complex_output = tf.math.imag(ifft_output) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
-    output = tf.stack([real_output, complex_output], axis=-1)
+    ifft_output = tf.signal.ifft2d(tf.complex(output[..., 0], output[..., 1])) 
+    output = tf.stack([tf.math.real(ifft_output), 
+                       tf.math.imag(ifft_output)], axis=-1) * tf.cast(tf.shape(output)[-2], dtype=tf.float32) ** 2
 
     output = output[..., 0]  # [batch, beta, alpha, gamma]
     output = tf.reshape(output, [*batch_size, 2 * b_out, 2 * b_out, 2 * b_out])
-
     return output
 
 
@@ -541,9 +537,7 @@ def SO3_fft_real(x, b_out: int):
         y = so3_rfft(x, b_out=b_out)
 
         def gradient(dy, variables=None):
-            # print("backprop so3_fft")
             dx = so3_ifft(dy, for_grad=True, b_out=b_in)[..., 0]  
-            # print(dx.shape.as_list())
             return dx
         
         return y, gradient
@@ -560,11 +554,23 @@ def SO3_ifft_real(x, b_out: int):
         y = so3_rifft(x, b_out=b_out) 
 
         def gradient(dy, variables=None):  # pylint: disable=W
-            # print("backprop so3_ifft")
             dx = so3_rfft(dy, for_grad=True, b_out=b_in)
-            # print(dx.shape.as_list())
             return dx
         
         return y, gradient
 
     return forward(x)
+
+def test_so3fft_cuda_cpu():
+    x = tf.ones([1, 50, 128, 128, 128])  # [..., beta, alpha, complex]
+    return so3_rfft(x, b_out=64)
+
+
+def test_so3ifft_cuda_cpu():
+    x = tf.ones([286, 32, 40, 2])  # [l * m, ..., complex]
+    return so3_rifft(x, b_out=13)
+
+
+if __name__ == "__main__":
+    test_so3fft_cuda_cpu()
+    test_so3ifft_cuda_cpu()

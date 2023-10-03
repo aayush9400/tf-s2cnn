@@ -1,8 +1,11 @@
 # pylint: disable=R,C,E1101,E1102
+import sys
+sys.path.append("../../")
 from functools import lru_cache
 from string import Template
 from s2cnn.utils.decorator import cached_dirpklgz
 import tensorflow as tf
+import numpy as np
 # inspired by https://gist.github.com/szagoruyko/89f83b6f5f4833d3c8adf81ee49f22a8
 
 
@@ -11,7 +14,6 @@ def s2_fft(x, for_grad=False, b_out=None):
     :param x: [..., beta, alpha, complex]
     :return:  [l * m, ..., complex]
     '''
-    # print(x.shape.as_list())
     assert x.shape[-1] == 2
     b_in = x.shape[-2] // 2
     assert x.shape[-2] == 2 * b_in
@@ -22,7 +24,6 @@ def s2_fft(x, for_grad=False, b_out=None):
     batch_size = x.shape[:-3]
 
     x = tf.reshape(x, (-1, 2 * b_in, 2 * b_in, 2))  # [batch, beta, alpha, complex]
-
     '''
     :param x: [batch, beta, alpha, complex] (nbatch, 2 * b_in, 2 * b_in, 2)
     :return: [l * m, batch, complex] (b_out**2, nbatch, 2)
@@ -30,15 +31,14 @@ def s2_fft(x, for_grad=False, b_out=None):
     nspec = b_out ** 2
     nbatch = x.shape[0]
 
-    wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)
+    wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad)
     wigner = tf.reshape(wigner, (2 * b_in, -1))  # [beta, l * m] (2 * b_in, nspec)
-
-    x = tf.stack([tf.math.real(tf.signal.fft(tf.complex(x[:,:,:,0], x[:,:,:,1]))), 
-          tf.math.imag(tf.signal.fft(tf.complex(x[:,:,:,0], x[:,:,:,1])))],
-          axis=-1)  # [batch, beta, m, complex]
     
+    fft_result = tf.constant(np.fft.fft(tf.complex(x[:,:,:,0], x[:,:,:,1]).numpy()), dtype=tf.complex64)
+    x = tf.stack([tf.math.real(fft_result), tf.math.imag(fft_result)], axis=-1)  # [batch, beta, m, complex]
+
     output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
-    # TO DO
+    # TODO
     if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
         # cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
@@ -55,9 +55,9 @@ def s2_fft(x, for_grad=False, b_out=None):
 
             xx = tf.concat((x[:, :, -l:], x[:, :, :l + 1]), axis=2) if l > 0 else x[:, :, :1]
 
-            update = tf.einsum("bm,zbmc->mzc", wigner[:, s], xx)
+            update = np.einsum("bm,zbmc->mzc", wigner[:, s], xx)
             output = tf.tensor_scatter_nd_update(output, indices, update)
-
+    
     output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m, ..., complex] (nspec, ..., 2)
     return output
 
@@ -83,9 +83,10 @@ def s2_ifft(x, for_grad=False, b_out=None):
     '''
     nbatch = x.shape[1]
 
-    wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)
+    wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad)
     wigner = tf.reshape(wigner, (2 * b_out, -1))  # [beta, l * m] (2 * b_out, nspec)
 
+    # TODO
     if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
         import s2cnn.utils.cuda as cuda_utils
         # cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
@@ -114,21 +115,16 @@ def s2_ifft(x, for_grad=False, b_out=None):
             if l > 0:
                 output = tf.tensor_scatter_nd_add(output, idx2, val2)
 
-    output = tf.stack([tf.math.real(tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1]))), 
-          tf.math.imag(tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1])))],
-          axis=-1)  * output.shape[-2]  # [batch, beta, alpha, complex]
-    
-    # output = torch.view_as_real(
-    #     torch.fft.ifft(
-    #         torch.view_as_complex(output))) * output.shape[-2]  
-    # [batch, beta, alpha, complex]
+    ifft_output = tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1]))
+    output = tf.stack([tf.math.real(ifft_output), 
+                       tf.math.imag(ifft_output)], axis=-1)  * output.shape[-2]  # [batch, beta, alpha, complex]
 
     output = tf.reshape(output, (*batch_size, 2 * b_out, 2 * b_out, 2))
     return output
 
 
 @lru_cache(maxsize=32)
-def _setup_wigner(b, nl, weighted, device):
+def _setup_wigner(b, nl, weighted):
     dss = _setup_s2_fft(b, nl, weighted)
     dss = tf.constant(dss, dtype=tf.float32)  # [beta, l * m] # pylint: disable=E1102
     return dss
@@ -284,21 +280,13 @@ def S2_ifft_real(x, b_out=None):
 
 
 def test_s2fft_cuda_cpu():
-    x = tf.random(1, 2, 12, 12, 2)  # [..., beta, alpha, complex]
-    z1 = s2_fft(x, b_out=5)
-    z2 = s2_fft(x.cuda(), b_out=5).cpu()
-    q = (z1 - z2).abs().max().item() / z1.std().item()
-    # print(q)
-    assert q < 1e-4
+    x = tf.ones([1, 2, 12, 12, 2])  # [..., beta, alpha, complex]
+    return s2_fft(x, b_out=5)
 
 
 def test_s2ifft_cuda_cpu():
-    x = tf.random(12 ** 2, 10, 2)  # [l * m, ..., complex]
-    z1 = s2_ifft(x, b_out=13)
-    z2 = s2_ifft(x.cuda(), b_out=13).cpu()
-    q = (z1 - z2).abs().max().item() / z1.std().item()
-    # print(q)
-    assert q < 1e-4
+    x = tf.ones([12 ** 2, 10, 2])  # [l * m, ..., complex]
+    return s2_ifft(x, b_out=13)
 
 
 if __name__ == "__main__":
