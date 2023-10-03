@@ -1,7 +1,7 @@
 # Spherical CNNs
 ## Equivariant CNNs for the sphere and SO(3) implemented in TensorFlow
 
-![Equivariance](https://github.com/GRG-Projects/SCNN/tree/master/examples/equivariance_plot/fig.jpeg)
+![Equivariance](https://github.com/aayush9400/tf-s2cnn/blob/master/examples/equivariance_plot/fig.jpeg)
 
 ## Overview
 This library contains a TensorFlow implementation of the rotation equivariant CNNs for spherical signals (e.g. omnidirectional images, signals on the globe) as presented in [[1]](https://arxiv.org/abs/1801.10130). Equivariant networks for the plane are available [here](https://github.com/tscohen/GrouPy).
