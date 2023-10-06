@@ -16,7 +16,7 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 
-MNIST_PATH = "../../s2_mnist.gz"
+MNIST_PATH = "s2_mnist.gz"
 
 DEVICE = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0" 
 
@@ -37,11 +37,11 @@ def load_data(path, batch_size):
     with gzip.open(path, 'rb') as f:
         dataset = pickle.load(f)
 
-    train_data = tf.convert_to_tensor(dataset["train"]["images"][:, None, :, :].astype(np.float64))[:32]
-    train_labels = tf.convert_to_tensor(dataset["train"]["labels"].astype(np.int64))[:32]
+    train_data = tf.convert_to_tensor(dataset["train"]["images"][:, None, :, :].astype(np.float64))
+    train_labels = tf.convert_to_tensor(dataset["train"]["labels"].astype(np.int64))
 
-    test_data = tf.convert_to_tensor(dataset["test"]["images"][:, None, :, :].astype(np.float64))[:32]
-    test_labels = tf.convert_to_tensor(dataset["test"]["labels"].astype(np.int64))[:32]
+    test_data = tf.convert_to_tensor(dataset["test"]["images"][:, None, :, :].astype(np.float64))
+    test_labels = tf.convert_to_tensor(dataset["test"]["labels"].astype(np.int64))
     
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data, train_labels)).batch(batch_size)
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data, test_labels)).batch(batch_size)
@@ -194,7 +194,7 @@ def main(network):
     else:
         raise ValueError('Unknown network architecture')
 
-    print("#params", sum(np.prod(var.shape) for var in classifier.trainable_variables))
+    # print("#params", sum(np.prod(var.shape) for var in classifier.trainable_variables))
 
     criterion = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
