@@ -7,3 +7,4 @@ dist
 notebooks/
 *.gz
 scnn_env/
+models/

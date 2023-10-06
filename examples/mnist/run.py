@@ -1,4 +1,5 @@
 # pylint: disable=E1101,R,C
+import os
 import sys
 sys.path.append("../../")
 
@@ -15,13 +16,20 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 
-MNIST_PATH = "s2_mnist.gz"
+MNIST_PATH = "../../s2_mnist.gz"
 
-DEVICE = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0"
+DEVICE = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0" 
 
 NUM_EPOCHS = 20
 BATCH_SIZE = 32
 LEARNING_RATE = 5e-3
+
+
+def save_model(path, model):
+    if not os.path.exists(path):
+        print('save directories...', flush=True)
+        os.makedirs(path)
+    model.save_weights(path + '/smnist_model')
 
 
 def load_data(path, batch_size):
@@ -29,11 +37,11 @@ def load_data(path, batch_size):
     with gzip.open(path, 'rb') as f:
         dataset = pickle.load(f)
 
-    train_data = tf.convert_to_tensor(dataset["train"]["images"][:, None, :, :].astype(np.float64))
-    train_labels = tf.convert_to_tensor(dataset["train"]["labels"].astype(np.int64))
+    train_data = tf.convert_to_tensor(dataset["train"]["images"][:, None, :, :].astype(np.float64))[:32]
+    train_labels = tf.convert_to_tensor(dataset["train"]["labels"].astype(np.int64))[:32]
 
-    test_data = tf.convert_to_tensor(dataset["test"]["images"][:, None, :, :].astype(np.float64))
-    test_labels = tf.convert_to_tensor(dataset["test"]["labels"].astype(np.int64))
+    test_data = tf.convert_to_tensor(dataset["test"]["images"][:, None, :, :].astype(np.float64))[:32]
+    test_labels = tf.convert_to_tensor(dataset["test"]["labels"].astype(np.int64))[:32]
     
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data, train_labels)).batch(batch_size)
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data, test_labels)).batch(batch_size)
@@ -73,7 +81,7 @@ class S2ConvNet_original(tf.keras.Model):
         self.fc = tf.keras.layers.Dense(f_output)
 
     def call(self, x):
-        x = tf.reshape(x, (BATCH_SIZE,1,60,60))
+        x = tf.reshape(x, (x.shape[0],1,60,60))
         x = self.conv1(x)
         x = tf.keras.activations.relu(x)
 
@@ -174,6 +182,8 @@ class S2ConvNet_deep(tf.keras.Model):
 
 
 def main(network):
+    NUM_EPOCHS = int(args.epochs)
+    LEARNING_RATE = float(args.lr)
 
     train_dataset, test_dataset = load_data(MNIST_PATH, BATCH_SIZE)
 
@@ -190,11 +200,12 @@ def main(network):
     optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 
     classifier.compile(optimizer=optimizer, loss=criterion, metrics=['accuracy'])
+
     # Prepare the metrics.
     train_acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
     val_acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
 
-    # history = classifier.fit(train_dataset, batch_size=BATCH_SIZE, epochs=NUM_EPOCHS, verbose=1, validation_data=test_dataset)
+    # history = classifier.fit(train_dataset, epochs=NUM_EPOCHS, validation_data=test_dataset, verbose=2)
 
     for epoch in range(NUM_EPOCHS):
         # Iterate over the batches of the dataset.
@@ -232,12 +243,20 @@ def main(network):
         val_acc_metric.reset_states()
         print("Validation acc: %.4f" % (float(val_acc),))
 
+    save_model('models', classifier)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--network",
                         help="network architecture to use",
                         default='original',
                         choices=['original', 'deep'])
+    parser.add_argument("--epochs",
+                        help="number of epochs to run for",
+                        default=20)
+    parser.add_argument("--lr",
+                        help="learning rate",
+                        default=5e-3)
     args = parser.parse_args()
 
     main(args.network)

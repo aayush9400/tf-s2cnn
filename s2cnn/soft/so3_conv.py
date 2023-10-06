@@ -36,8 +36,8 @@ class SO3Convolution(tf.keras.layers.Layer):
         b_init = tf.zeros_initializer()
         # self.bias = tf.Variable(initial_value=b_init(shape=[1, self.nfeature_out, 1, 1, 1], dtype=tf.float32), trainable=True)
 
-        self.kernel = self.add_weight(shape=[self.nfeature_in, self.nfeature_out, len(self.grid)], initializer=k_init, trainable=True)
-        self.bias = self.add_weight(shape=[1, self.nfeature_out, 1, 1, 1], initializer=b_init, trainable=True)
+        self.kernel = self.add_weight(shape=[self.nfeature_in, self.nfeature_out, len(self.grid)], initializer=k_init, trainable=True, name='so3_kernel')
+        self.bias = self.add_weight(shape=[1, self.nfeature_out, 1, 1, 1], initializer=b_init, trainable=True, name='s2_bias')
 
 
     def call(self, x):  # pylint: disable=W
