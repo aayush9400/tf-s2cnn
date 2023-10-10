@@ -39,24 +39,24 @@ def s2_fft(x, for_grad=False, b_out=None):
 
     output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
     # TODO
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        import s2cnn.utils.cuda as cuda_utils
-        # cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
-        # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
-        # cuda_kernel(block=(1024, 1, 1),
-        #             grid=(cuda_utils.get_blocks(nspec * nbatch, 1024), 1, 1),
-        #             args=[x.contiguous().data_ptr(), wigner.contiguous().data_ptr(), output.data_ptr()],
-        #             stream=stream)
-        # [l * m, batch, complex]       
-    else:
-        for l in range(b_out):
-            s = slice(l ** 2, l ** 2 + 2 * l + 1)
-            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     import s2cnn.utils.cuda as cuda_utils
+    #     # cuda_kernel = _setup_s2fft_cuda_kernel(b=b_in, nspec=nspec, nbatch=nbatch, device=x.device.index)
+    #     # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+    #     # cuda_kernel(block=(1024, 1, 1),
+    #     #             grid=(cuda_utils.get_blocks(nspec * nbatch, 1024), 1, 1),
+    #     #             args=[x.contiguous().data_ptr(), wigner.contiguous().data_ptr(), output.data_ptr()],
+    #     #             stream=stream)
+    #     # [l * m, batch, complex]       
+    # else:
+    for l in range(b_out):
+        s = slice(l ** 2, l ** 2 + 2 * l + 1)
+        indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
 
-            xx = tf.concat((x[:, :, -l:], x[:, :, :l + 1]), axis=2) if l > 0 else x[:, :, :1]
+        xx = tf.concat((x[:, :, -l:], x[:, :, :l + 1]), axis=2) if l > 0 else x[:, :, :1]
 
-            update = np.einsum("bm,zbmc->mzc", wigner[:, s], xx)
-            output = tf.tensor_scatter_nd_update(output, indices, update)
+        update = np.einsum("bm,zbmc->mzc", wigner[:, s], xx)
+        output = tf.tensor_scatter_nd_update(output, indices, update)
     
     output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m, ..., complex] (nspec, ..., 2)
     return output
@@ -87,33 +87,33 @@ def s2_ifft(x, for_grad=False, b_out=None):
     wigner = tf.reshape(wigner, (2 * b_out, -1))  # [beta, l * m] (2 * b_out, nspec)
 
     # TODO
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        import s2cnn.utils.cuda as cuda_utils
-        # cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
-        # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
-        # output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2))
-        # cuda_kernel(block=(1024, 1, 1),
-        #             grid=(cuda_utils.get_blocks(nbatch * (2 * b_out) ** 2, 1024), 1, 1),
-        #             args=[x.data_ptr(), wigner.data_ptr(), output.data_ptr()],
-        #             stream=stream)
-        # [batch, beta, m, complex] (nbatch, 2 * b_out, 2 * b_out, 2)
-    else:
-        output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2), dtype=tf.float32)
-        for l in range(b_in):
-            s = slice(l ** 2, l ** 2 + 2 * l + 1)
-            # indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
-            
-            out = tf.einsum("mzc,bm->zbmc", x[s], wigner[:, s])
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     import s2cnn.utils.cuda as cuda_utils
+    #     # cuda_kernel = _setup_s2ifft_cuda_kernel(b=b_out, nl=b_in, nbatch=nbatch, device=x.device.index)
+    #     # stream = cuda_utils.Stream(ptr=torch.cuda.current_stream().cuda_stream)
+    #     # output = x.new_empty((nbatch, 2 * b_out, 2 * b_out, 2))
+    #     # cuda_kernel(block=(1024, 1, 1),
+    #     #             grid=(cuda_utils.get_blocks(nbatch * (2 * b_out) ** 2, 1024), 1, 1),
+    #     #             args=[x.data_ptr(), wigner.data_ptr(), output.data_ptr()],
+    #     #             stream=stream)
+    #     # [batch, beta, m, complex] (nbatch, 2 * b_out, 2 * b_out, 2)
+    # else:
+    output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2), dtype=tf.float32)
+    for l in range(b_in):
+        s = slice(l ** 2, l ** 2 + 2 * l + 1)
+        # indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+        
+        out = tf.einsum("mzc,bm->zbmc", x[s], wigner[:, s])
 
-            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l+1), indexing='ij'), axis=-1)
-            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l, 2*b_out), indexing='ij'), axis=-1)
+        idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l+1), indexing='ij'), axis=-1)
+        idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l, 2*b_out), indexing='ij'), axis=-1)
 
-            val1 = out[:, :, -l - 1:]
-            val2 = out[:, :, :l]
+        val1 = out[:, :, -l - 1:]
+        val2 = out[:, :, :l]
 
-            output = tf.tensor_scatter_nd_add(output, idx1, val1)
-            if l > 0:
-                output = tf.tensor_scatter_nd_add(output, idx2, val2)
+        output = tf.tensor_scatter_nd_add(output, idx1, val1)
+        if l > 0:
+            output = tf.tensor_scatter_nd_add(output, idx2, val2)
 
     ifft_output = tf.signal.ifft(tf.complex(output[:,:,:,0], output[:,:,:,1]))
     output = tf.stack([tf.math.real(ifft_output), 

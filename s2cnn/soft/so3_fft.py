@@ -41,44 +41,44 @@ def so3_fft(x, for_grad=False, b_out=None):
                   tf.math.imag(fft_x)], axis=-1) # [batch, beta, m, n, complex] 
 
     output = tf.zeros((nspec, nbatch, 2), dtype=tf.float32)
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=False, device=x.device.index)
-        cuda_kernel(x, wigner, output)  # [l * m * n, batch, complex]
-    else:
-        if b_in < b_out:
-            output = tf.zeros_like(output)
-        for l in range(b_out):
-            start = l * (4 * l**2 - 1) // 3
-            end = start + (2 * l + 1) ** 2
-            s = slice(start, end)
-            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=False, device=x.device.index)
+    #     cuda_kernel(x, wigner, output)  # [l * m * n, batch, complex]
+    # else:
+    if b_in < b_out:
+        output = tf.zeros_like(output)
+    for l in range(b_out):
+        start = l * (4 * l**2 - 1) // 3
+        end = start + (2 * l + 1) ** 2
+        s = slice(start, end)
+        indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
 
-            l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
+        l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
-            xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
+        xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
 
-            # Creating array of indices for each slice
-            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
-            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
-            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
-            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
+        # Creating array of indices for each slice
+        idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+        idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+        idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
+        idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
 
-            # Extracting values corresponding to the created indices
-            val1 = x[:, :, :l1 + 1, :l1 + 1]
-            val2 = x[:, :, -l1:, :l1 + 1]
-            val3 = x[:, :, :l1 + 1, -l1:]
-            val4 = x[:, :, -l1:, -l1:]
+        # Extracting values corresponding to the created indices
+        val1 = x[:, :, :l1 + 1, :l1 + 1]
+        val2 = x[:, :, -l1:, :l1 + 1]
+        val3 = x[:, :, :l1 + 1, -l1:]
+        val4 = x[:, :, -l1:, -l1:]
 
-            # Adding the extracted values to the output tensor
-            xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
-            if l1 > 0:
-                xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
-                xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
-                xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
+        # Adding the extracted values to the output tensor
+        xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
+        if l1 > 0:
+            xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
+            xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
+            xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
 
-            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
-            output = tf.tensor_scatter_nd_update(output, indices, out)
+        ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+        out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
+        output = tf.tensor_scatter_nd_update(output, indices, out)
     
     output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m * n, ..., complex]
     return output
@@ -108,48 +108,48 @@ def so3_rfft(x, for_grad=False, b_out=None):
     wigner = _setup_wigner(b_in, nl=b_out, weighted=not for_grad, device=x.device)
 
     output = tf.zeros((nspec, nbatch, 2), dtype=x.dtype)
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        x = tf.view_as_real(tf.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
-        cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=True, device=x.device.index)
-        cuda_kernel(x, wigner, output)
-    else:
-        fft_x = tf.signal.rfft2d(x)
-        x = tf.stack([tf.math.real(fft_x),tf.math.imag(fft_x)], axis=-1)
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     x = tf.view_as_real(tf.fft.rfftn(x, dim=[2,3]))  # [batch, beta, m, n, complex]
+    #     cuda_kernel = _setup_so3fft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_input=True, device=x.device.index)
+    #     cuda_kernel(x, wigner, output)
+    # else:
+    fft_x = tf.signal.rfft2d(x)
+    x = tf.stack([tf.math.real(fft_x),tf.math.imag(fft_x)], axis=-1)
 
-        if b_in < b_out:
-            output = tf.zeros_like(output)
-        for l in range(b_out):
-            start = l * (4 * l**2 - 1) // 3
-            end = start + (2 * l + 1) ** 2
-            s = slice(start, end)
-            indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
+    if b_in < b_out:
+        output = tf.zeros_like(output)
+    for l in range(b_out):
+        start = l * (4 * l**2 - 1) // 3
+        end = start + (2 * l + 1) ** 2
+        s = slice(start, end)
+        indices = [list(range(i, i + 1)) for i in range(s.start, s.stop)]
 
-            l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
+        l1 = min(l, b_in - 1)  # if b_out > b_in, consider high frequencies as null
 
-            xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
+        xx = tf.zeros((x.shape[0], x.shape[1], 2 * l + 1, 2 * l + 1, 2), dtype=x.dtype)
 
-            # Creating array of indices for each slice
-            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
-            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
-            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
-            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
+        # Creating array of indices for each slice
+        idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+        idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l, l+l1+1), indexing='ij'), axis=-1)
+        idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l, l+l1+1), tf.range(l-l1, l), indexing='ij'), axis=-1)
+        idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_in), tf.range(l-l1, l), tf.range(l-l1, l), indexing='ij'), axis=-1)
 
-            # Extracting values corresponding to the created indices
-            val1 = x[:, :, :l1 + 1, :l1 + 1]
-            val2 = x[:, :, -l1:, :l1 + 1]
-            val3 = x[:, :, :l1 + 1, -l1:]
-            val4 = x[:, :, -l1:, -l1:]
+        # Extracting values corresponding to the created indices
+        val1 = x[:, :, :l1 + 1, :l1 + 1]
+        val2 = x[:, :, -l1:, :l1 + 1]
+        val3 = x[:, :, :l1 + 1, -l1:]
+        val4 = x[:, :, -l1:, -l1:]
 
-            # Adding the extracted values to the output tensor
-            xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
-            if l1 > 0:
-                xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
-                xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
-                xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
+        # Adding the extracted values to the output tensor
+        xx = tf.tensor_scatter_nd_add(xx, idx1, val1)
+        if l1 > 0:
+            xx = tf.tensor_scatter_nd_add(xx, idx2, val2)
+            xx = tf.tensor_scatter_nd_add(xx, idx3, val3)
+            xx = tf.tensor_scatter_nd_add(xx, idx4, val4)
 
-            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
-            output = tf.tensor_scatter_nd_update(output, indices, out)
+        ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+        out = tf.reshape(tf.einsum("bmn,zbmnc->mnzc", ww, xx), ((2 * l + 1) ** 2, -1, 2))
+        output = tf.tensor_scatter_nd_update(output, indices, out)
     
     output = tf.reshape(output, (-1, *batch_size, 2))  # [l * m * n, ..., complex]
     return output
@@ -178,40 +178,40 @@ def so3_ifft(x, for_grad=False, b_out=None):
     wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad)  # [beta, l * m * n] (2 * b_out, nspec)
 
     output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2), dtype=x.dtype)
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=False, device=x.device.index)
-        cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
-    else:
-        output = tf.zeros_like(output)
-        for l in range(min(b_in, b_out)):
-            start = l * (4 * l**2 - 1) // 3
-            end = start + (2 * l + 1)**2
-            s = slice(start, end)
-            
-            xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
-            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=False, device=x.device.index)
+    #     cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
+    # else:
+    output = tf.zeros_like(output)
+    for l in range(min(b_in, b_out)):
+        start = l * (4 * l**2 - 1) // 3
+        end = start + (2 * l + 1)**2
+        s = slice(start, end)
+        
+        xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
+        ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+        out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
 
-            l1 = min(l, b_out - 1)  # if b_out < b_in
+        l1 = min(l, b_out - 1)  # if b_out < b_in
 
-            # Creating array of indices for each slice
-            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
-            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
-            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
-            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+        # Creating array of indices for each slice
+        idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
+        idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
+        idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+        idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
 
-            # Extracting values corresponding to the created indices
-            val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
-            val2 = out[:, :, l - l1: l, l: l + l1 + 1]
-            val3 = out[:, :, l: l + l1 + 1, l - l1: l]
-            val4 = out[:, :, l - l1: l, l - l1: l]
+        # Extracting values corresponding to the created indices
+        val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
+        val2 = out[:, :, l - l1: l, l: l + l1 + 1]
+        val3 = out[:, :, l: l + l1 + 1, l - l1: l]
+        val4 = out[:, :, l - l1: l, l - l1: l]
 
-            # Adding the extracted values to the output tensor
-            output = tf.tensor_scatter_nd_add(output, idx1, val1)
-            if l > 0:
-                output = tf.tensor_scatter_nd_add(output, idx2, val2)
-                output = tf.tensor_scatter_nd_add(output, idx3, val3)
-                output = tf.tensor_scatter_nd_add(output, idx4, val4)
+        # Adding the extracted values to the output tensor
+        output = tf.tensor_scatter_nd_add(output, idx1, val1)
+        if l > 0:
+            output = tf.tensor_scatter_nd_add(output, idx2, val2)
+            output = tf.tensor_scatter_nd_add(output, idx3, val3)
+            output = tf.tensor_scatter_nd_add(output, idx4, val4)
 
     ifft_output = tf.signal.ifft2d(tf.complex(output[..., 0], output[..., 1]))
     output = tf.stack([tf.math.real(ifft_output), 
@@ -245,39 +245,39 @@ def so3_rifft(x, for_grad=False, b_out=None):
     wigner = _setup_wigner(b_out, nl=b_in, weighted=for_grad, device=x.device)  # [beta, l * m * n] (2 * b_out, nspec)
 
     output = tf.zeros((nbatch, 2 * b_out, 2 * b_out, 2 * b_out, 2), dtype=x.dtype)
-    if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
-        cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=True, device=x.device.index)
-        cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
-    else:
-        for l in range(min(b_in, b_out)):
-            start = l * (4 * l**2 - 1) // 3
-            end = start + (2 * l + 1)**2
-            s = slice(start, end)
-            
-            xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
-            ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
-            out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
+    # if len(tf.config.experimental.list_physical_devices('GPU')) > 0 and x.dtype == tf.float32:
+    #     cuda_kernel = _setup_so3ifft_cuda_kernel(b_in=b_in, b_out=b_out, nbatch=nbatch, real_output=True, device=x.device.index)
+    #     cuda_kernel(x, wigner, output)  # [batch, beta, m, n, complex]
+    # else:
+    for l in range(min(b_in, b_out)):
+        start = l * (4 * l**2 - 1) // 3
+        end = start + (2 * l + 1)**2
+        s = slice(start, end)
+        
+        xx = tf.reshape(x[s], [2 * l + 1, 2 * l + 1, -1, 2])
+        ww = tf.reshape(wigner[:, s], [-1, 2 * l + 1, 2 * l + 1])
+        out = tf.einsum("mnzc,bmn->zbmnc", xx, ww)
 
-            l1 = min(l, b_out - 1)  # if b_out < b_in
+        l1 = min(l, b_out - 1)  # if b_out < b_in
 
-            # Creating array of indices for each slice
-            idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
-            idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
-            idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
-            idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+        # Creating array of indices for each slice
+        idx1 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(l1+1), indexing='ij'), axis=-1)
+        idx2 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(l1+1), indexing='ij'), axis=-1)
+        idx3 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(l1+1), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
+        idx4 = tf.stack(tf.meshgrid(tf.range(nbatch), tf.range(2 * b_out), tf.range(2*b_out-l1, 2*b_out), tf.range(2*b_out-l1, 2*b_out), indexing='ij'), axis=-1)
 
-            # Extracting values corresponding to the created indices
-            val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
-            val2 = out[:, :, l - l1: l, l: l + l1 + 1]
-            val3 = out[:, :, l: l + l1 + 1, l - l1: l]
-            val4 = out[:, :, l - l1: l, l - l1: l]
+        # Extracting values corresponding to the created indices
+        val1 = out[:, :, l: l + l1 + 1, l: l + l1 + 1]
+        val2 = out[:, :, l - l1: l, l: l + l1 + 1]
+        val3 = out[:, :, l: l + l1 + 1, l - l1: l]
+        val4 = out[:, :, l - l1: l, l - l1: l]
 
-            # Adding the extracted values to the output tensor
-            output = tf.tensor_scatter_nd_add(output, idx1, val1)
-            if l > 0:
-                output = tf.tensor_scatter_nd_add(output, idx2, val2)
-                output = tf.tensor_scatter_nd_add(output, idx3, val3)
-                output = tf.tensor_scatter_nd_add(output, idx4, val4)
+        # Adding the extracted values to the output tensor
+        output = tf.tensor_scatter_nd_add(output, idx1, val1)
+        if l > 0:
+            output = tf.tensor_scatter_nd_add(output, idx2, val2)
+            output = tf.tensor_scatter_nd_add(output, idx3, val3)
+            output = tf.tensor_scatter_nd_add(output, idx4, val4)
 
     ifft_output = tf.signal.ifft2d(tf.complex(output[..., 0], output[..., 1])) 
     output = tf.stack([tf.math.real(ifft_output), 

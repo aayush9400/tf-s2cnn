@@ -19,6 +19,7 @@ from tqdm import tqdm
 MNIST_PATH = "s2_mnist.gz"
 
 DEVICE = "/gpu:0" if tf.config.experimental.list_physical_devices("GPU") else "/cpu:0" 
+print(DEVICE)
 
 NUM_EPOCHS = 20
 BATCH_SIZE = 32
@@ -105,63 +106,50 @@ class S2ConvNet_deep(tf.keras.Model):
         grid_so3_3 = so3_near_identity_grid(n_alpha=6, max_beta=np.pi/ 4, n_beta=1, max_gamma=2*np.pi, n_gamma=6)
         grid_so3_4 = so3_near_identity_grid(n_alpha=6, max_beta=np.pi/ 2, n_beta=1, max_gamma=2*np.pi, n_gamma=6)
 
-        self.convolutional = tf.keras.Sequential([
-            S2Convolution(
+        self.convs2 = S2Convolution(
                 nfeature_in  = 1,
                 nfeature_out = 8,
                 b_in  = bandwidth,
                 b_out = bandwidth,
-                grid=grid_s2),
-            tf.keras.layers.ReLU(),
-
-            SO3Convolution(
+                grid=grid_s2)
+        
+        self.convso31 = SO3Convolution(
                 nfeature_in  =  8,
                 nfeature_out = 16,
                 b_in  = bandwidth,
                 b_out = bandwidth//2,
-                grid=grid_so3_1),
-            tf.keras.layers.ReLU(),
+                grid=grid_so3_1)
 
-            SO3Convolution(
+        self.convso32 = SO3Convolution(
                 nfeature_in  = 16,
                 nfeature_out = 16,
                 b_in  = bandwidth//2,
                 b_out = bandwidth//2,
-                grid=grid_so3_2),
-            tf.keras.layers.ReLU(),
-
-            SO3Convolution(
+                grid=grid_so3_2)
+        self.convso33 = SO3Convolution(
                 nfeature_in  = 16,
                 nfeature_out = 24,
                 b_in  = bandwidth//2,
                 b_out = bandwidth//4,
-                grid=grid_so3_2),
-            tf.keras.layers.ReLU(),
-
-            SO3Convolution(
+                grid=grid_so3_2)
+        self.convso34 = SO3Convolution(
                 nfeature_in  = 24,
                 nfeature_out = 24,
                 b_in  = bandwidth//4,
                 b_out = bandwidth//4,
-                grid=grid_so3_3),
-            tf.keras.layers.ReLU(),
-
-            SO3Convolution(
+                grid=grid_so3_3)
+        self.convso35 = SO3Convolution(
                 nfeature_in  = 24,
                 nfeature_out = 32,
                 b_in  = bandwidth//4,
                 b_out = bandwidth//8,
-                grid=grid_so3_3),
-            tf.keras.layers.ReLU(),
-
-            SO3Convolution(
+                grid=grid_so3_3)
+        self.convso36 = SO3Convolution(
                 nfeature_in  = 32,
                 nfeature_out = 64,
                 b_in  = bandwidth//8,
                 b_out = bandwidth//8,
-                grid=grid_so3_4),
-            tf.keras.layers.ReLU()
-        ])
+                grid=grid_so3_4)
 
         self.flatten = tf.keras.layers.Flatten()
         self.fc = tf.keras.Sequential([
@@ -174,8 +162,24 @@ class S2ConvNet_deep(tf.keras.Model):
         ])
 
     def call(self, x):
-        x = self.convolutional(x)
+        x = self.convs2(x)
+        x = tf.keras.activations.relu(x)
+
+        x = self.convso31(x)
+        x = tf.keras.activations.relu(x)
+        x = self.convso32(x)
+        x = tf.keras.activations.relu(x)
+        x = self.convso33(x)
+        x = tf.keras.activations.relu(x)
+        x = self.convso34(x)
+        x = tf.keras.activations.relu(x)
+        x = self.convso35(x)
+        x = tf.keras.activations.relu(x)
+        x = self.convso36(x)
+        x = tf.keras.activations.relu(x)
+
         x = so3_integrate(x)
+
         x = self.flatten(x)
         x = self.fc(x)
         return x
