@@ -19,7 +19,7 @@ def s2_rft(x, b, grid):
     assert x.shape[-1] == F.shape[0]
 
     sz = x.shape.as_list()
-    x = tf.einsum("ia,afc->fic", tf.reshape(x, (-1, x.shape[-1])), tf.identity(F)) # [l * m, ..., complex]
+    x = tf.einsum("ia,afc->fic", tf.cast(tf.reshape(x, (-1, x.shape[-1])), F.dtype), tf.identity(F)) # [l * m, ..., complex]
     x = tf.reshape(x, (-1, *sz[:-1], 2))
     return x
 

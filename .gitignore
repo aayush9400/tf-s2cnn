@@ -8,3 +8,6 @@ notebooks/
 *.gz
 scnn_env/
 models/
+5_sp_img.pickle
+rotationally equivariant.webp
+.vscode/*

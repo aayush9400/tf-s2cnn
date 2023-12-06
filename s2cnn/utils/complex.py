@@ -15,6 +15,7 @@ def complex_mm(x, y, conj_x=False, conj_y=False):
     :param y: [k, j, complex] (K, N, 2)
     :return:  [i, j, complex] (M, N, 2)
     '''
+    x = tf.cast(x, y.dtype)
     xr = x[:, :, 0]
     xi = x[:, :, 1]
 
